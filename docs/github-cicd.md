@@ -100,6 +100,7 @@ Current workflow assumptions:
 
 * Resource group: `dyc-comm-prod-rg`
 * ACR: `dyccommprodacr`
+* ACR login server: `dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io`
 * Web app: `dyc-comm-prod-web`
 * API app: `dyc-comm-prod-api`
 

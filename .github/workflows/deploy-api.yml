@@ -21,7 +21,8 @@ env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-api
   ACR_NAME: dyccommprodacr
-  IMAGE_NAME: dyccommprodacr.azurecr.io/dyc-comm-api:${{ github.sha }}
+  ACR_LOGIN_SERVER: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
+  IMAGE_NAME: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io/dyc-comm-api:${{ github.sha }}
 
 jobs:
   deploy:
@@ -48,4 +49,3 @@ jobs:
           resourceGroup: ${{ env.RESOURCE_GROUP }}
           containerAppName: ${{ env.CONTAINER_APP_NAME }}
           disableTelemetry: true
-
