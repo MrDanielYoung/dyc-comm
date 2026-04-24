@@ -76,8 +76,11 @@ Add these repository secrets:
 * `AZURE_CLIENT_ID`
 * `AZURE_TENANT_ID`
 * `AZURE_SUBSCRIPTION_ID`
+* `REGISTRY_USERNAME`
+* `REGISTRY_PASSWORD`
 
 These correspond to the GitHub deployment identity, not the Microsoft Graph user-login app.
+The registry secrets come from the Azure Container Registry access keys page.
 
 ## GitHub Repository Settings
 
