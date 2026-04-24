@@ -1,0 +1,51 @@
+name: Deploy API
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/deploy-api.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: true
+
+env:
+  RESOURCE_GROUP: dyc-comm-prod-rg
+  CONTAINER_APP_NAME: dyc-comm-prod-api
+  ACR_NAME: dyccommprodacr
+  IMAGE_NAME: dyccommprodacr.azurecr.io/dyc-comm-api:${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and deploy api container app
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          appSourcePath: ${{ github.workspace }}/apps/api
+          dockerfilePath: Dockerfile
+          acrName: ${{ env.ACR_NAME }}
+          imageToBuild: ${{ env.IMAGE_NAME }}
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
+          containerAppName: ${{ env.CONTAINER_APP_NAME }}
+          disableTelemetry: true
+

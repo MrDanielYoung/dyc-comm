@@ -2,6 +2,12 @@
 
 ## Product + Architecture Specification (v1)
 
+Related planning docs:
+
+* [docs/mvp-account-strategy.md](docs/mvp-account-strategy.md) - Microsoft-first MVP scope, managed accounts, folder policy, and backlog
+* [docs/working-sop.md](docs/working-sop.md) - verification-first workflow to reduce avoidable errors and unverified assumptions
+* [docs/github-cicd.md](docs/github-cicd.md) - GitHub Actions, Azure OIDC, and deployment workflow setup
+
 ---
 
 ## 1. Overview

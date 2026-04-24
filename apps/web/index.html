@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DYC Comm</title>
+    <style>
+      :root {
+        --ink: #122033;
+        --muted: #5c708a;
+        --line: #d7dde7;
+        --canvas: #f4f7fb;
+        --panel: #ffffff;
+        --accent: #0057b8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(0, 87, 184, 0.08), transparent 32%),
+          linear-gradient(180deg, #f8fbff 0%, var(--canvas) 100%);
+        color: var(--ink);
+      }
+
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 56px 24px 80px;
+      }
+
+      .eyebrow {
+        display: inline-block;
+        margin-bottom: 16px;
+        padding: 8px 12px;
+        border: 1px solid rgba(0, 87, 184, 0.14);
+        border-radius: 999px;
+        color: var(--accent);
+        background: rgba(0, 87, 184, 0.06);
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: clamp(2.4rem, 7vw, 4.4rem);
+        line-height: 0.98;
+      }
+
+      p {
+        max-width: 44rem;
+        color: var(--muted);
+        font-size: 1.05rem;
+        line-height: 1.6;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 16px;
+        margin-top: 32px;
+      }
+
+      .card {
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--panel);
+        box-shadow: 0 10px 30px rgba(18, 32, 51, 0.05);
+      }
+
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 1rem;
+      }
+
+      .card p {
+        margin: 0;
+        font-size: 0.96rem;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: #eef4fb;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">DYC Comm</div>
+      <h1>Communications Control Plane</h1>
+      <p>
+        This is the initial production-aligned deployment shell for DYC Comm.
+        The Azure runtime, GitHub Actions pipeline, and Microsoft 365 auth
+        integration are being wired before the mailbox workflow UI lands.
+      </p>
+      <div class="grid">
+        <section class="card">
+          <h2>Web</h2>
+          <p>Served from <code>dyc-comm-prod-web</code> in Azure Container Apps.</p>
+        </section>
+        <section class="card">
+          <h2>API</h2>
+          <p>Health check available at <code>/health</code> and config check at <code>/config-check</code>.</p>
+        </section>
+        <section class="card">
+          <h2>Next</h2>
+          <p>Microsoft account linking, policy-driven folder routing, and audit-backed actions.</p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
+
