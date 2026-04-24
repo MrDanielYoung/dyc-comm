@@ -20,8 +20,7 @@ concurrency:
 env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-api
-  ACR_NAME: dyccommprodacr
-  ACR_LOGIN_SERVER: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
+  REGISTRY_URL: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
   IMAGE_NAME: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io/dyc-comm-api:${{ github.sha }}
 
 jobs:
@@ -44,7 +43,9 @@ jobs:
         with:
           appSourcePath: ${{ github.workspace }}/apps/api
           dockerfilePath: Dockerfile
-          acrName: ${{ env.ACR_NAME }}
+          registryUrl: ${{ env.REGISTRY_URL }}
+          registryUsername: ${{ secrets.REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
           imageToBuild: ${{ env.IMAGE_NAME }}
           resourceGroup: ${{ env.RESOURCE_GROUP }}
           containerAppName: ${{ env.CONTAINER_APP_NAME }}
