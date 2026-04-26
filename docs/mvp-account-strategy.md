@@ -61,19 +61,23 @@ Notes:
 
 Keep the folder structure intentionally lean.
 
-Folders:
+* We will use numbering to help to pin each folder in order:
 
-* `Inbox`
-* `Review`
-* `News`
-* `Notifications`
+* Inbox -> Normal for the email account
+* 10 - Review
+* 20 - News
+* 30 - LinkedIn
+* 40 - Notifications
+* 50 - Marketing
 
 Interpretation:
 
 * `Inbox` means the message may require attention, reply, decision, or manual review soon
-* `Review` means worth reading later, but not urgent and not part of the designated news stream
+* `Review` means worth reading later, but not urgent and not part of the designated news stream; SMS notices, login PINs, etc. go here.
 * `News` means approved publication/news sources only
-* `Notifications` means informational mail that should not consume inbox space
+* `LinkedIn`means any message having to do with LinkedIn, from LinkedIn, third-party apps, services, etc. 
+* `Notifications` means informational mail that should not consume inbox space, but that's not marketing or sales
+* `Marketing`means any emails selling me something, pitching, etc. from clearly non-human senders. 
 
 ## MVP Move Policy
 
