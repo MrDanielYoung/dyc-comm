@@ -19,8 +19,10 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install API dev dependencies
-        run: pip install -r apps/api/requirements-dev.txt
+      - name: Install API dependencies
+        run: |
+          pip install -r apps/api/requirements.txt
+          pip install -r apps/api/requirements-dev.txt
 
       - name: Compile API
         run: python -m compileall apps/api/app
