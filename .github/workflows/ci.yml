@@ -17,12 +17,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install API dependencies
-        run: pip install -r apps/api/requirements.txt
+        run: |
+          pip install -r apps/api/requirements.txt
+          pip install -r apps/api/requirements-dev.txt
 
       - name: Compile API
         run: python -m compileall apps/api/app
+
+      - name: Lint (ruff)
+        run: ruff check apps tests
+
+      - name: Format check (ruff format)
+        run: ruff format --check apps tests
+
+      - name: Run tests
+        run: pytest
 
   docker-builds:
     runs-on: ubuntu-latest
@@ -48,4 +60,3 @@ jobs:
           file: ./apps/api/Dockerfile
           push: false
           tags: dyc-comm/api:ci
-

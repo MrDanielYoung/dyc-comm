@@ -4,6 +4,7 @@
 
 Related planning docs:
 
+* [docs/local-setup.md](docs/local-setup.md) - run the API locally, required env vars, secret handling rules
 * [docs/mvp-account-strategy.md](docs/mvp-account-strategy.md) - Microsoft-first MVP scope, managed accounts, folder policy, and backlog
 * [docs/working-sop.md](docs/working-sop.md) - verification-first workflow to reduce avoidable errors and unverified assumptions
 * [docs/github-cicd.md](docs/github-cicd.md) - GitHub Actions, Azure OIDC, and deployment workflow setup

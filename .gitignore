@@ -1,8 +1,40 @@
+# Python
 .venv/
+venv/
 __pycache__/
 .pytest_cache/
 *.pyc
 *.pyo
 *.pyd
-.DS_Store
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# Environment / secrets — never commit real values.
+# Track .env.example variants instead.
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+secrets.json
+secrets.yaml
+*.pem
+*.key
+
+# Local MCP / agent config: may contain bearer tokens.
+# Commit .mcp.json.example as the documented template.
+.mcp.json
+.claude/
+CLAUDE.md
