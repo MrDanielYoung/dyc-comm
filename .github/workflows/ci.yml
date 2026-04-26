@@ -6,10 +6,6 @@ on:
     branches:
       - main
 
-permissions:
-  contents: read
-  pull-requests: write
-
 jobs:
   api-checks:
     runs-on: ubuntu-latest
@@ -32,26 +28,7 @@ jobs:
         run: python -m compileall apps/api/app
 
       - name: Lint (ruff)
-        id: lint
-        run: |
-          ruff check --diff apps tests > /tmp/ruff_diff.txt 2>&1 || true
-          ruff check --output-format=github apps tests
-
-      - name: Comment ruff diff on failure
-        if: failure() && github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          {
-            echo 'Ruff diff:'
-            echo
-            echo '```diff'
-            cat /tmp/ruff_diff.txt
-            echo '```'
-          } > /tmp/comment.md
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+        run: ruff check apps tests
 
       - name: Format check (ruff format)
         run: ruff format --check apps tests
