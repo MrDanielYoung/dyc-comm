@@ -31,4 +31,3 @@ def config_check() -> dict[str, object]:
         "has_entra_redirect_uri": bool(os.getenv("MICROSOFT_ENTRA_REDIRECT_URI")),
         "key_vault_refs_enabled": _bool_env("KEY_VAULT_REFS_ENABLED"),
     }
-
