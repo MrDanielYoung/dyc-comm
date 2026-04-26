@@ -28,7 +28,17 @@ jobs:
         run: python -m compileall apps/api/app
 
       - name: Lint (ruff)
-        run: ruff check --output-format=github apps tests
+        id: lint
+        run: |
+          ruff check --diff apps tests > /tmp/ruff_diff.txt 2>&1 || true
+          ruff check --output-format=github apps tests
+
+      - name: Upload ruff diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-diff
+          path: /tmp/ruff_diff.txt
 
       - name: Format check (ruff format)
         run: ruff format --check apps tests
