@@ -4,14 +4,26 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>DYC Comm</title>
+    <link rel="stylesheet" href="https://use.typekit.net/dhs7zbs.css">
     <style>
       :root {
-        --ink: #122033;
-        --muted: #5c708a;
-        --line: #d7dde7;
-        --canvas: #f4f7fb;
-        --panel: #ffffff;
-        --accent: #0057b8;
+        --font-sans: "DIN Pro", "DINPro", "FF DIN Pro", "DIN 2014", "Avenir Next", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --canvas: #eef1f5;
+        --panel: rgba(255, 255, 255, 0.96);
+        --panel-soft: rgba(246, 248, 251, 0.96);
+        --text: #17161b;
+        --muted: #686c76;
+        --line: rgba(23, 22, 27, 0.1);
+        --accent: #4a83c5;
+        --accent-deep: #343f91;
+        --accent-mid: #418dcb;
+        --accent-light: #acc7e4;
+        --success: #1d7f46;
+        --warning: #8f5a12;
+        --shadow: 0 10px 24px rgba(20, 22, 27, 0.05);
+        --radius-xl: 18px;
+        --radius-lg: 12px;
+        --radius-md: 10px;
       }
 
       * {
@@ -20,101 +32,925 @@
 
       body {
         margin: 0;
-        font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+        min-height: 100vh;
+        font-family: var(--font-sans);
         background:
-          radial-gradient(circle at top left, rgba(0, 87, 184, 0.08), transparent 32%),
-          linear-gradient(180deg, #f8fbff 0%, var(--canvas) 100%);
-        color: var(--ink);
+          linear-gradient(180deg, rgba(74, 131, 197, 0.05) 0%, transparent 18%),
+          linear-gradient(180deg, #fafafb 0%, var(--canvas) 100%);
+        color: var(--text);
+      }
+
+      img {
+        display: block;
+        max-width: 100%;
       }
 
       main {
-        max-width: 860px;
+        max-width: 1180px;
         margin: 0 auto;
-        padding: 56px 24px 80px;
+        padding: 28px 20px 64px;
+      }
+
+      .shell {
+        display: grid;
+        gap: 22px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 18px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 4px 14px rgba(20, 22, 27, 0.03);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .brand-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        flex: 0 0 auto;
+      }
+
+      .brand-wordmark {
+        height: 18px;
+        width: auto;
+      }
+
+      .topbar-note {
+        margin: 0;
+        color: var(--accent-deep);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+        gap: 22px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius-xl);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .connect-panel {
+        padding: 24px;
+        display: grid;
+        gap: 16px;
       }
 
       .eyebrow {
-        display: inline-block;
-        margin-bottom: 16px;
-        padding: 8px 12px;
-        border: 1px solid rgba(0, 87, 184, 0.14);
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 6px 10px;
         border-radius: 999px;
-        color: var(--accent);
-        background: rgba(0, 87, 184, 0.06);
-        font-size: 14px;
-        font-weight: 600;
-        letter-spacing: 0.02em;
+        background: rgba(74, 131, 197, 0.08);
+        color: var(--accent-deep);
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       h1 {
-        margin: 0 0 16px;
-        font-size: clamp(2.4rem, 7vw, 4.4rem);
-        line-height: 0.98;
-      }
-
-      p {
-        max-width: 44rem;
-        color: var(--muted);
-        font-size: 1.05rem;
-        line-height: 1.6;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 16px;
-        margin-top: 32px;
-      }
-
-      .card {
-        padding: 20px;
-        border: 1px solid var(--line);
-        border-radius: 20px;
-        background: var(--panel);
-        box-shadow: 0 10px 30px rgba(18, 32, 51, 0.05);
-      }
-
-      .card h2 {
-        margin: 0 0 8px;
-        font-size: 1rem;
-      }
-
-      .card p {
         margin: 0;
-        font-size: 0.96rem;
+        max-width: 16ch;
+        font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+        line-height: 1.02;
+        letter-spacing: -0.025em;
+        font-weight: 700;
+      }
+
+      .brand-strip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .brand-strip-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+      }
+
+      .brand-strip-text {
+        display: grid;
+        gap: 2px;
+      }
+
+      .brand-strip-label {
+        margin: 0;
+        color: var(--accent-deep);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .brand-strip-value {
+        margin: 0;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--muted);
+      }
+
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      button,
+      .button-link {
+        appearance: none;
+        min-height: 50px;
+        padding: 12px 16px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        font: inherit;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        text-decoration: none;
+        cursor: pointer;
+        transition:
+          transform 140ms ease,
+          box-shadow 140ms ease,
+          background-color 140ms ease,
+          border-color 140ms ease;
+      }
+
+      button:hover,
+      .button-link:hover {
+        transform: translateY(-1px);
+      }
+
+      button:active,
+      .button-link:active {
+        transform: scale(0.985);
+      }
+
+      .primary {
+        color: #fff;
+        background: linear-gradient(180deg, var(--accent-mid) 0%, var(--accent-deep) 100%);
+        box-shadow: 0 8px 18px rgba(52, 63, 145, 0.12);
+      }
+
+      .secondary {
+        color: var(--text);
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .notice {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: var(--panel-soft);
+        color: var(--muted);
+        line-height: 1.45;
+        font-size: 0.82rem;
+      }
+
+      .info-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .info-item {
+        padding: 13px 14px;
+        border-radius: var(--radius-lg);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(244, 247, 251, 0.94) 100%);
+        border: 1px solid var(--line);
+      }
+
+      .label {
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .value {
+        margin: 0;
+        font-size: 0.92rem;
+        font-weight: 500;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+
+      .status-panel {
+        padding: 22px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 8px 11px;
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .status-chip.idle {
+        color: var(--text);
+        background: rgba(23, 22, 27, 0.07);
+      }
+
+      .status-chip.connected {
+        color: var(--success);
+        background: rgba(29, 127, 70, 0.12);
+      }
+
+      .status-title {
+        margin: 0;
+        font-size: 1.14rem;
+        line-height: 1.08;
+        letter-spacing: -0.01em;
+      }
+
+      .status-copy {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.48;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .meta-card {
+        padding: 13px 14px;
+        border-radius: var(--radius-lg);
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid var(--line);
+      }
+
+      .section-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+        gap: 16px;
+      }
+
+      .section-panel {
+        padding: 20px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .section-title {
+        margin: 0;
+        font-size: 0.88rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .readiness-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .readiness-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 14px;
+        border-radius: var(--radius-md);
+        background: rgba(255, 255, 255, 0.76);
+        border: 1px solid var(--line);
+      }
+
+      .readiness-label {
+        font-weight: 500;
+      }
+
+      .readiness-value {
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .readiness-value.ok {
+        color: var(--success);
+      }
+
+      .readiness-value.missing {
+        color: var(--warning);
+      }
+
+      .ops-grid {
+        display: none;
+      }
+
+      .ops-card {
+        display: none;
+      }
+
+      .ops-value {
+        display: none;
+      }
+
+      .diagnostic-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .diagnostic-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 11px 12px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+      }
+
+      .diagnostic-name {
+        font-size: 0.88rem;
+        font-weight: 500;
+      }
+
+      .diagnostic-state {
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .diagnostic-state.ok {
+        color: var(--success);
+      }
+
+      .diagnostic-state.missing {
+        color: var(--warning);
+      }
+
+      .endpoint-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+
+      .endpoint-button {
+        text-align: left;
+        min-height: 62px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--text);
+      }
+
+      .endpoint-button strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 0.84rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .endpoint-button span {
+        display: block;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.35;
+      }
+
+      .endpoint-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+        transform: none;
+      }
+
+      .raw-output {
+        margin: 0;
+        padding: 14px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: #f7f8fa;
+        color: #20242c;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 0.78rem;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 96px;
+      }
+
+      .folder-board {
+        display: grid;
+        gap: 14px;
+      }
+
+      .folder-groups {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .folder-group {
+        padding: 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        display: grid;
+        gap: 10px;
+      }
+
+      .folder-group h3 {
+        margin: 0;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .folder-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .folder-entry {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: #fff;
+        border: 1px solid var(--line);
+      }
+
+      .folder-entry-name {
+        font-size: 0.86rem;
+        font-weight: 500;
+      }
+
+      .folder-entry-tag {
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--accent-deep);
+      }
+
+      .empty-state {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.45;
       }
 
       code {
-        padding: 2px 6px;
-        border-radius: 6px;
-        background: #eef4fb;
+        padding: 3px 8px;
+        border-radius: 10px;
+        background: rgba(63, 126, 194, 0.09);
+        color: var(--accent-deep);
+        font-size: 0.88rem;
+        font-weight: 500;
+      }
+
+      @media (max-width: 980px) {
+        .layout,
+        .section-grid,
+        .info-grid,
+        .meta-grid,
+        .folder-groups,
+        .endpoint-actions {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+          border-radius: 24px;
+        }
+
+        .topbar-note {
+          white-space: normal;
+        }
+
+        .connect-panel,
+        .status-panel,
+        .section-panel {
+          padding: 18px;
+        }
       }
     </style>
   </head>
   <body>
     <main>
-      <div class="eyebrow">DYC Comm</div>
-      <h1>Communications Control Plane</h1>
-      <p>
-        This is the initial production-aligned deployment shell for DYC Comm.
-        The Azure runtime, GitHub Actions pipeline, and Microsoft 365 auth
-        integration are being wired before the mailbox workflow UI lands.
-      </p>
-      <div class="grid">
-        <section class="card">
-          <h2>Web</h2>
-          <p>Served from <code>dyc-comm-prod-web</code> in Azure Container Apps.</p>
+      <div class="shell">
+        <header class="topbar">
+          <div class="brand">
+            <img class="brand-icon" src="./assets/dy-icon.png" alt="Daniel Young icon">
+            <img class="brand-wordmark" src="./assets/dy-wordmark.png" alt="Daniel Young">
+          </div>
+          <p class="topbar-note">Mailbox setup console</p>
+        </header>
+
+        <section class="layout">
+          <section class="panel connect-panel">
+            <div class="brand-strip">
+              <img class="brand-strip-icon" src="./assets/dy-icon.png" alt="Daniel Young icon">
+              <div class="brand-strip-text">
+                <p class="brand-strip-label">Daniel Young</p>
+                <p class="brand-strip-value">Mailbox setup</p>
+              </div>
+            </div>
+            <div class="eyebrow">Microsoft 365</div>
+            <h1>Connect the mailbox</h1>
+            <div class="action-row">
+              <a class="button-link primary" id="connectLink" href="#">Connect Microsoft 365</a>
+              <button class="secondary" id="refreshButton" type="button">Refresh</button>
+              <button class="secondary" id="signOutButton" type="button">Clear session</button>
+            </div>
+            <p class="notice" id="authNotice">
+              Sign-in status and runtime errors appear here.
+            </p>
+            <div class="info-grid">
+              <div class="info-item">
+                <p class="label">Linked account</p>
+                <p class="value" id="linkedEmail">Not connected yet</p>
+              </div>
+              <div class="info-item">
+                <p class="label">Mailbox access</p>
+                <p class="value" id="mailboxAccess">Waiting for sign-in</p>
+              </div>
+              <div class="info-item">
+                <p class="label">API base</p>
+                <p class="value"><code id="apiBaseText"></code></p>
+              </div>
+            </div>
+          </section>
+
+          <aside class="panel status-panel">
+            <span class="status-chip idle" id="statusChip">Checking connection state</span>
+            <h2 class="status-title">Current session</h2>
+            <p class="status-copy">
+              Browser session state and backend readiness.
+            </p>
+            <div class="meta-grid">
+              <div class="meta-card">
+                <p class="label">Display name</p>
+                <p class="value" id="linkedName">—</p>
+              </div>
+              <div class="meta-card">
+                <p class="label">Session state</p>
+                <p class="value" id="sessionState">Checking</p>
+              </div>
+            </div>
+          </aside>
         </section>
-        <section class="card">
-          <h2>API</h2>
-          <p>Health check available at <code>/health</code> and config check at <code>/config-check</code>.</p>
-        </section>
-        <section class="card">
-          <h2>Next</h2>
-          <p>Microsoft account linking, policy-driven folder routing, and audit-backed actions.</p>
+
+        <section class="section-grid">
+          <section class="panel section-panel">
+            <h2 class="section-title">Mailbox</h2>
+            <div class="folder-board">
+              <div class="readiness-list">
+                <div class="readiness-item">
+                  <span class="readiness-label">API reachability</span>
+                  <span class="readiness-value" id="apiReachability">Checking</span>
+                </div>
+                <div class="readiness-item">
+                  <span class="readiness-label">OAuth configuration</span>
+                  <span class="readiness-value" id="oauthReadiness">Checking</span>
+                </div>
+                <div class="readiness-item">
+                  <span class="readiness-label">Database connection</span>
+                  <span class="readiness-value" id="dbReadiness">Checking</span>
+                </div>
+              </div>
+              <div class="folder-groups">
+                <div class="folder-group">
+                  <h3>DYC folders</h3>
+                  <div class="folder-list" id="dycFolderList">
+                    <p class="empty-state">Connect the mailbox to load DYC-managed folders.</p>
+                  </div>
+                </div>
+                <div class="folder-group">
+                  <h3>Legacy / other folders</h3>
+                  <div class="folder-list" id="otherFolderList">
+                    <p class="empty-state">No folder inventory loaded yet.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel section-panel">
+            <h2 class="section-title">Actions</h2>
+            <div class="endpoint-actions">
+              <button class="endpoint-button" id="sessionButton" type="button">
+                <strong>Session</strong>
+                <span>Fetch `/auth/session`</span>
+              </button>
+              <button class="endpoint-button" id="foldersButton" type="button" disabled>
+                <strong>Folders</strong>
+                <span>Fetch `/mail/folders`</span>
+              </button>
+              <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
+                <strong>Inventory Sync</strong>
+                <span>POST `/mail/folders/inventory/sync`</span>
+              </button>
+              <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
+                <strong>Bootstrap</strong>
+                <span>POST `/mail/folders/bootstrap`</span>
+              </button>
+            </div>
+            <div class="diagnostic-list" id="missingConfigList">
+              <div class="diagnostic-row">
+                <span class="diagnostic-name">Loading</span>
+                <span class="diagnostic-state missing">Checking</span>
+              </div>
+            </div>
+            <h2 class="section-title">Last response</h2>
+            <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
+          </section>
         </section>
       </div>
     </main>
+
+    <script>
+      function inferApiBase() {
+        const params = new URLSearchParams(window.location.search);
+        const explicit = params.get("api");
+        if (explicit) {
+          return explicit.replace(/\/$/, "");
+        }
+
+        const { hostname, protocol } = window.location;
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+          return "http://localhost:8000";
+        }
+        if (hostname.startsWith("comm.")) {
+          return `${protocol}//api.${hostname}`;
+        }
+        return "https://api.comm.danielyoung.io";
+      }
+
+      const API_BASE = inferApiBase();
+      const connectLink = document.getElementById("connectLink");
+      const refreshButton = document.getElementById("refreshButton");
+      const signOutButton = document.getElementById("signOutButton");
+      const authNotice = document.getElementById("authNotice");
+      const statusChip = document.getElementById("statusChip");
+      const linkedEmail = document.getElementById("linkedEmail");
+      const linkedName = document.getElementById("linkedName");
+      const mailboxAccess = document.getElementById("mailboxAccess");
+      const sessionState = document.getElementById("sessionState");
+      const apiBaseText = document.getElementById("apiBaseText");
+      const apiReachability = document.getElementById("apiReachability");
+      const oauthReadiness = document.getElementById("oauthReadiness");
+      const dbReadiness = document.getElementById("dbReadiness");
+      const missingConfigList = document.getElementById("missingConfigList");
+      const rawOutput = document.getElementById("rawOutput");
+      const sessionButton = document.getElementById("sessionButton");
+      const foldersButton = document.getElementById("foldersButton");
+      const inventorySyncButton = document.getElementById("inventorySyncButton");
+      const bootstrapButton = document.getElementById("bootstrapButton");
+      const dycFolderList = document.getElementById("dycFolderList");
+      const otherFolderList = document.getElementById("otherFolderList");
+
+      apiBaseText.textContent = API_BASE;
+      connectLink.href = `${API_BASE}/auth/microsoft/start`;
+
+      function setStatus(isConnected, email, name, isMailboxReady) {
+        statusChip.className = `status-chip ${isConnected ? "connected" : "idle"}`;
+        statusChip.textContent = isConnected ? "Microsoft account linked" : "Awaiting Microsoft account";
+        linkedEmail.textContent = email || "Not connected yet";
+        linkedName.textContent = name || "—";
+        mailboxAccess.textContent = isConnected
+          ? (isMailboxReady ? "Ready for mailbox calls" : "Linked, awaiting runtime")
+          : "Waiting for sign-in";
+        sessionState.textContent = isConnected ? "Connected" : "Not connected";
+      }
+
+      function setReadiness(element, isReady, readyText = "Ready", missingText = "Pending") {
+        element.className = `readiness-value ${isReady ? "ok" : "missing"}`;
+        element.textContent = isReady ? readyText : missingText;
+      }
+
+      function setRawOutput(label, payload) {
+        const text = typeof payload === "string"
+          ? payload
+          : JSON.stringify(payload, null, 2);
+        rawOutput.textContent = `${label}\n\n${text}`;
+      }
+
+      function renderMissingConfig(payload) {
+        const checks = [
+          ["Database URL", payload.has_database_url],
+          ["Entra client ID", payload.has_entra_client_id],
+          ["Entra tenant ID", payload.has_entra_tenant_id],
+          ["Entra client secret", payload.has_entra_client_secret],
+          ["Entra redirect URI", payload.has_entra_redirect_uri]
+        ];
+
+        const missing = checks.filter(([, ok]) => !ok);
+        if (!missing.length) {
+          missingConfigList.innerHTML = `
+            <div class="diagnostic-row">
+              <span class="diagnostic-name">All required configuration is present</span>
+              <span class="diagnostic-state ok">Ready</span>
+            </div>
+          `;
+          return;
+        }
+
+        missingConfigList.innerHTML = missing.map(([name]) => `
+          <div class="diagnostic-row">
+            <span class="diagnostic-name">${name}</span>
+            <span class="diagnostic-state missing">Missing</span>
+          </div>
+        `).join("");
+      }
+
+      function updateActionAvailability(payload) {
+        const sessionReady = true;
+        const mailboxReady = Boolean(payload.linked_account) && Boolean(payload.mailbox_access_ready);
+        sessionButton.disabled = !sessionReady;
+        foldersButton.disabled = !mailboxReady;
+        inventorySyncButton.disabled = !mailboxReady;
+        bootstrapButton.disabled = !mailboxReady;
+      }
+
+      function renderFolderBucket(element, folders, emptyText) {
+        if (!folders.length) {
+          element.innerHTML = `<p class="empty-state">${emptyText}</p>`;
+          return;
+        }
+
+        element.innerHTML = folders.map((folder) => `
+          <div class="folder-entry">
+            <span class="folder-entry-name">${folder.displayName}</span>
+            <span class="folder-entry-tag">${folder.ownership || "unknown"}</span>
+          </div>
+        `).join("");
+      }
+
+      function renderFolders(folders) {
+        const dycFolders = folders.filter((folder) => folder.ownership === "dyc_managed");
+        const otherFolders = folders.filter((folder) => folder.ownership !== "dyc_managed");
+
+        renderFolderBucket(
+          dycFolderList,
+          dycFolders,
+          "No DYC-managed folders loaded yet."
+        );
+        renderFolderBucket(
+          otherFolderList,
+          otherFolders,
+          "No legacy or manual folders loaded yet."
+        );
+      }
+
+      async function callApi(label, path, options = {}) {
+        const response = await fetch(`${API_BASE}${path}`, {
+          credentials: "include",
+          ...options
+        });
+        const text = await response.text();
+        let payload;
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = text;
+        }
+        setRawOutput(`${label} (${response.status})`, payload);
+        if (!response.ok) {
+          throw new Error(`${label} failed with ${response.status}`);
+        }
+        return payload;
+      }
+
+      async function loadSession() {
+        authNotice.textContent = "Checking API session state…";
+        try {
+          const payload = await callApi("Session", "/auth/session");
+          const account = payload.linked_account;
+          setStatus(
+            Boolean(account),
+            account?.email,
+            account?.display_name,
+            Boolean(payload.mailbox_access_ready)
+          );
+          setReadiness(apiReachability, true);
+          setReadiness(
+            oauthReadiness,
+            payload.has_entra_client_id &&
+              payload.has_entra_tenant_id &&
+              payload.has_entra_client_secret &&
+              payload.has_entra_redirect_uri
+          );
+          setReadiness(dbReadiness, payload.has_database_url);
+          renderMissingConfig(payload);
+          updateActionAvailability(payload);
+          if (!account) {
+            renderFolders([]);
+          }
+          authNotice.textContent = account
+            ? "Session available."
+            : "No linked session.";
+        } catch (error) {
+          setStatus(false, null, null, false);
+          setReadiness(apiReachability, false, "Reachable", "Unavailable");
+          setReadiness(oauthReadiness, false);
+          setReadiness(dbReadiness, false);
+          missingConfigList.innerHTML = `
+            <div class="diagnostic-row">
+              <span class="diagnostic-name">API request failed</span>
+              <span class="diagnostic-state missing">Error</span>
+            </div>
+          `;
+          updateActionAvailability({});
+          renderFolders([]);
+          authNotice.textContent = `Unable to reach the API right now: ${error.message}`;
+        }
+      }
+
+      async function signOut() {
+        authNotice.textContent = "Clearing the local account session…";
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: "POST",
+          credentials: "include"
+        });
+        await loadSession();
+      }
+
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("auth") === "success") {
+        authNotice.textContent = "Microsoft sign-in returned successfully. Refreshing session state…";
+        url.search = "";
+        window.history.replaceState({}, "", url);
+      }
+
+      if (url.searchParams.get("auth") === "error") {
+        const reason = url.searchParams.get("reason") || "Unknown authorization error.";
+        authNotice.textContent = `Microsoft sign-in returned an error: ${reason}`;
+        url.search = "";
+        window.history.replaceState({}, "", url);
+      }
+
+      refreshButton.addEventListener("click", loadSession);
+      signOutButton.addEventListener("click", signOut);
+      sessionButton.addEventListener("click", () => callApi("Session", "/auth/session").catch(() => {}));
+      foldersButton.addEventListener("click", async () => {
+        try {
+          const payload = await callApi("Folders", "/mail/folders");
+          renderFolders(payload.folders || []);
+        } catch {}
+      });
+      inventorySyncButton.addEventListener("click", async () => {
+        try {
+          const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
+            method: "POST"
+          });
+          renderFolders(payload.folders || []);
+        } catch {}
+      });
+      bootstrapButton.addEventListener("click", async () => {
+        try {
+          const payload = await callApi("Bootstrap", "/mail/folders/bootstrap", {
+            method: "POST"
+          });
+          renderFolders(payload.ensured_folders || []);
+        } catch {}
+      });
+      loadSession();
+    </script>
   </body>
 </html>
-

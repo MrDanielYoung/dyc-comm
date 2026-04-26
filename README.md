@@ -7,6 +7,8 @@ Related planning docs:
 * [docs/mvp-account-strategy.md](docs/mvp-account-strategy.md) - Microsoft-first MVP scope, managed accounts, folder policy, and backlog
 * [docs/working-sop.md](docs/working-sop.md) - verification-first workflow to reduce avoidable errors and unverified assumptions
 * [docs/github-cicd.md](docs/github-cicd.md) - GitHub Actions, Azure OIDC, and deployment workflow setup
+* [docs/azure-runtime-config.md](docs/azure-runtime-config.md) - current Azure Container Apps runtime contract and required production settings
+* [infra/azure/api-runtime-settings.env.example](infra/azure/api-runtime-settings.env.example) - example API runtime values for Azure Container Apps
 
 ---
 

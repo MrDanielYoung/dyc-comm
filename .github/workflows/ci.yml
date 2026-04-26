@@ -24,6 +24,9 @@ jobs:
       - name: Compile API
         run: python -m compileall apps/api/app
 
+      - name: Run API tests
+        run: pytest tests/api
+
   docker-builds:
     runs-on: ubuntu-latest
     steps:
@@ -48,4 +51,3 @@ jobs:
           file: ./apps/api/Dockerfile
           push: false
           tags: dyc-comm/api:ci
-

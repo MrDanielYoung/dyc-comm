@@ -61,19 +61,44 @@ Notes:
 
 Keep the folder structure intentionally lean.
 
-Folders:
+We will use numbering to pin each folder in order:
 
-* `Inbox`
-* `Review`
-* `News`
-* `Notifications`
+* `Inbox` -> normal for the email account
+* `10 - Review`
+* `20 - News`
+* `30 - LinkedIn`
+* `40 - Notifications`
+* `50 - Marketing`
+* `60 - Notes`
+* `70 - Contracts`
+* `80 - Travel`
+* `90 - IT Reports`
 
 Interpretation:
 
-* `Inbox` means the message may require attention, reply, decision, or manual review soon
-* `Review` means worth reading later, but not urgent and not part of the designated news stream
+* `Inbox` means the message may require attention, a response or reply, decision, or manual review soon
+* `Review` means worth reading later, but not urgent and not part of the designated news stream; SMS notices, login PINs, and similar low-importance access messages can go here
 * `News` means approved publication/news sources only
-* `Notifications` means informational mail that should not consume inbox space
+* `LinkedIn` means any message related to LinkedIn, from LinkedIn itself or adjacent third-party services
+* `Notifications` means informational mail that should not consume inbox space, but is not marketing or sales
+* `Marketing` means emails selling, pitching, or promoting from clearly non-human senders
+* `Notes` means AI notetaker output, meeting transcriptions, and similar summary material
+* `Contracts` means Adobe Sign, DocuSign, and related legal documents where a signature or formal acceptance is needed
+* `Travel` means travel receipts and documents; flight, reservation, and departure items should still be treated as scheduling/calendar-relevant
+* `IT Reports` means DMARC reports, spam reports, analytics, and similar technical reporting mail
+
+Legacy rule-fed folders currently observed in the first live mailbox:
+
+* `Wolt`
+* `Amazon`
+* `Komote`
+* `Cycle Touring`
+
+Migration stance:
+
+* these should be treated as legacy-rule compatibility folders during cutover
+* DYC should inventory and recognize them, but not treat them as part of the core DYC-managed numbered folder set
+* the long-term goal remains to replace Exchange rules with DYC-owned routing
 
 ## MVP Move Policy
 
