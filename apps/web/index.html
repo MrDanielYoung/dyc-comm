@@ -576,8 +576,8 @@
       <div class="shell">
         <header class="topbar">
           <div class="brand">
-            <img class="brand-icon" src="./assets/dy-icon.png" alt="Daniel Young icon">
-            <img class="brand-wordmark" src="./assets/dy-wordmark.png" alt="Daniel Young">
+            <img class="brand-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
+            <img class="brand-wordmark" src="/assets/dy-wordmark.png?v=20260426b" alt="Daniel Young">
           </div>
           <p class="topbar-note">Mailbox setup console</p>
         </header>
@@ -585,7 +585,7 @@
         <section class="layout">
           <section class="panel connect-panel">
             <div class="brand-strip">
-              <img class="brand-strip-icon" src="./assets/dy-icon.png" alt="Daniel Young icon">
+              <img class="brand-strip-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
               <div class="brand-strip-text">
                 <p class="brand-strip-label">Daniel Young</p>
                 <p class="brand-strip-value">Mailbox setup</p>
@@ -714,7 +714,7 @@
 
         const { hostname, protocol } = window.location;
         if (hostname === "localhost" || hostname === "127.0.0.1") {
-          return "http://localhost:8000";
+          return "http://127.0.0.1:8000";
         }
         if (hostname.startsWith("comm.")) {
           return `${protocol}//api.${hostname}`;
@@ -838,6 +838,14 @@
         );
       }
 
+      async function loadMailboxView() {
+        const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
+          method: "POST"
+        });
+        renderFolders(payload.folders || []);
+        return payload;
+      }
+
       async function callApi(label, path, options = {}) {
         const response = await fetch(`${API_BASE}${path}`, {
           credentials: "include",
@@ -881,6 +889,13 @@
           updateActionAvailability(payload);
           if (!account) {
             renderFolders([]);
+          } else if (payload.mailbox_access_ready) {
+            authNotice.textContent = "Mailbox connected. Loading folder inventory…";
+            try {
+              await loadMailboxView();
+            } catch (error) {
+              authNotice.textContent = `Mailbox connected, but folder inventory could not be loaded yet: ${error.message}`;
+            }
           }
           authNotice.textContent = account
             ? "Session available."
