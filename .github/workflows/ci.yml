@@ -28,14 +28,7 @@ jobs:
         run: python -m compileall apps/api/app
 
       - name: Lint (ruff)
-        run: |
-          {
-            echo '## Ruff diff'
-            echo '```diff'
-            ruff check --diff apps tests || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          ruff check --output-format=github apps tests
+        run: ruff check apps tests
 
       - name: Format check (ruff format)
         run: ruff format --check apps tests
