@@ -68,6 +68,15 @@ Folders:
 * `News`
 * `Notifications`
 
+Alternative Folder Naming, using numeber scheme to sort order:
+
+* `Inbox` (Part of the standard inbox)
+* `20 - Review`
+* `30 - News`
+* `40 - Notifications`
+
+* Gaps in the numbering are for future use cases and additional boxes after MVP.
+
 Interpretation:
 
 * `Inbox` means the message may require attention, reply, decision, or manual review soon
