@@ -42,16 +42,18 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Fetch runtime secrets from Key Vault
+      - name: Fetch Key Vault secrets and apply API runtime settings
         uses: azure/cli@v2
         with:
           azcliversion: latest
           inlineScript: |
             set -euo pipefail
 
+            echo "Target Container App: ${CONTAINER_APP_NAME} in ${RESOURCE_GROUP}"
+            echo "Key Vault: ${KEY_VAULT_NAME}"
+
             fetch_secret() {
-              local out_name="$1"
-              local kv_name="$2"
+              local kv_name="$1"
               local value
               value="$(az keyvault secret show \
                 --vault-name "$KEY_VAULT_NAME" \
@@ -62,26 +64,19 @@ jobs:
                 echo "::error::Key Vault secret '${kv_name}' in vault '${KEY_VAULT_NAME}' is empty or missing." >&2
                 exit 1
               fi
-              # Mask the value in logs and export to subsequent steps.
+              # Mask the value so it cannot be echoed in subsequent log lines.
               echo "::add-mask::${value}"
-              {
-                echo "${out_name}<<__EOF_${out_name}__"
-                echo "${value}"
-                echo "__EOF_${out_name}__"
-              } >> "$GITHUB_ENV"
+              printf '%s' "${value}"
             }
 
-            fetch_secret DATABASE_URL database-url
-            fetch_secret MICROSOFT_ENTRA_CLIENT_ID microsoft-entra-client-id
-            fetch_secret MICROSOFT_ENTRA_TENANT_ID microsoft-entra-tenant-id
-            fetch_secret MICROSOFT_ENTRA_CLIENT_SECRET microsoft-entra-client-secret
-
-      - name: Apply API runtime settings
-        uses: azure/cli@v2
-        with:
-          azcliversion: latest
-          inlineScript: |
-            set -euo pipefail
+            echo "Fetching secret: database-url"
+            DATABASE_URL="$(fetch_secret database-url)"
+            echo "Fetching secret: microsoft-entra-client-id"
+            MICROSOFT_ENTRA_CLIENT_ID="$(fetch_secret microsoft-entra-client-id)"
+            echo "Fetching secret: microsoft-entra-tenant-id"
+            MICROSOFT_ENTRA_TENANT_ID="$(fetch_secret microsoft-entra-tenant-id)"
+            echo "Fetching secret: microsoft-entra-client-secret"
+            MICROSOFT_ENTRA_CLIENT_SECRET="$(fetch_secret microsoft-entra-client-secret)"
 
             for var in DATABASE_URL MICROSOFT_ENTRA_CLIENT_ID MICROSOFT_ENTRA_TENANT_ID MICROSOFT_ENTRA_CLIENT_SECRET; do
               if [[ -z "${!var:-}" ]]; then
@@ -90,6 +85,7 @@ jobs:
               fi
             done
 
+            echo "Applying runtime env vars to Container App ${CONTAINER_APP_NAME}"
             az containerapp update \
               --name "$CONTAINER_APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
@@ -105,3 +101,5 @@ jobs:
                 ALLOWED_ORIGINS="$ALLOWED_ORIGINS" \
                 KEY_VAULT_REFS_ENABLED=false \
               --output none
+
+            echo "Container App update complete."
