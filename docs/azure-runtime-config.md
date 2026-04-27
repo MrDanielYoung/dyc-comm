@@ -146,6 +146,11 @@ After applying settings, confirm the API is healthy and configured:
 `KEY_VAULT_REFS_ENABLED` is on; use it as the source of truth before
 declaring an apply successful.
 
+The response includes a `variables` object keyed by env-var name, each with
+`present` (bool) and `is_secret` (bool) fields, plus a derived
+`all_required_present` flag. Secret values are never returned — only
+presence. Top-level `has_*` keys are kept for backward compatibility.
+
 ## Security and admin tasks
 
 - **Rotate the previously committed MCP bearer token.** Treat it as
