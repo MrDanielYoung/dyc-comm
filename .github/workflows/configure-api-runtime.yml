@@ -75,8 +75,8 @@ jobs:
             MICROSOFT_ENTRA_CLIENT_ID="$(fetch_secret microsoft-entra-client-id)"
             echo "Fetching secret: microsoft-entra-tenant-id"
             MICROSOFT_ENTRA_TENANT_ID="$(fetch_secret microsoft-entra-tenant-id)"
-            echo "Fetching secret: microsoft-entra-client-secret"
-            MICROSOFT_ENTRA_CLIENT_SECRET="$(fetch_secret microsoft-entra-client-secret)"
+            echo "Fetching secret: dyc-comm-prod-value"
+            MICROSOFT_ENTRA_CLIENT_SECRET="$(fetch_secret dyc-comm-prod-value)"
 
             for var in DATABASE_URL MICROSOFT_ENTRA_CLIENT_ID MICROSOFT_ENTRA_TENANT_ID MICROSOFT_ENTRA_CLIENT_SECRET; do
               if [[ -z "${!var:-}" ]]; then
