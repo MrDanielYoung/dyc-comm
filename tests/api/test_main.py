@@ -272,9 +272,7 @@ def test_microsoft_callback_redirects_with_error(monkeypatch):
     )
 
     assert response.status_code == 302
-    assert response.headers["location"] == (
-        "http://localhost:3000/?auth=error&reason=No+consent"
-    )
+    assert response.headers["location"] == ("http://localhost:3000/?auth=error&reason=No+consent")
 
 
 def test_microsoft_callback_rejects_state_mismatch(monkeypatch):

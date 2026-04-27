@@ -9,15 +9,9 @@ on:
 jobs:
   api-checks:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,21 +31,7 @@ jobs:
         run: ruff check apps tests
 
       - name: Format check (ruff format)
-        run: |
-          set +e
-          ruff format --check --diff apps tests > /tmp/fmt.diff 2>&1
-          rc=$?
-          if [ $rc -ne 0 ] && [ "${{ github.head_ref }}" = "extract/m365-auth-folder-slice" ]; then
-            cp /tmp/fmt.diff /tmp/format.diff
-            git config user.email "ci@github.com"
-            git config user.name "ci-bot"
-            mkdir -p .ci-debug
-            cp /tmp/fmt.diff .ci-debug/format.diff
-            git add .ci-debug/format.diff
-            git commit -m "ci: capture format diff [skip ci]" || true
-            git push origin HEAD:${{ github.head_ref }} || true
-          fi
-          exit $rc
+        run: ruff format --check apps tests
 
       - name: Run tests
         run: pytest
