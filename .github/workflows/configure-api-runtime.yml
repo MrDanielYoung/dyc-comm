@@ -69,8 +69,8 @@ jobs:
               printf '%s' "${value}"
             }
 
-            echo "Fetching secret: database-url"
-            DATABASE_URL="$(fetch_secret database-url)"
+            echo "Fetching secret: PGdb-url"
+            DATABASE_URL="$(fetch_secret PGdb-url)"
             echo "Fetching secret: microsoft-entra-client-id"
             MICROSOFT_ENTRA_CLIENT_ID="$(fetch_secret microsoft-entra-client-id)"
             echo "Fetching secret: microsoft-entra-tenant-id"
