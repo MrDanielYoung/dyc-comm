@@ -236,6 +236,29 @@ async def _graph_get(
     return response.json()
 
 
+async def _graph_post(access_token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(
+            f"https://graph.microsoft.com/v1.0{path}",
+            headers=headers,
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Microsoft Graph write request failed",
+                "status_code": response.status_code,
+                "body": response.text,
+            },
+        )
+    return response.json()
+
+
 def _session_payload(
     linked_account: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -398,6 +421,35 @@ def _ensure_account_tables() -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_connected_account_user
                 ON connected_account(user_id)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mailbox_folder (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id) ON DELETE CASCADE,
+                    provider_folder_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    canonical_name TEXT NOT NULL,
+                    parent_folder_id TEXT,
+                    child_folder_count INTEGER NOT NULL DEFAULT 0,
+                    total_item_count INTEGER NOT NULL DEFAULT 0,
+                    unread_item_count INTEGER NOT NULL DEFAULT 0,
+                    is_hidden BOOLEAN NOT NULL DEFAULT false,
+                    ownership TEXT NOT NULL,
+                    routing_state TEXT NOT NULL,
+                    folder_role TEXT NOT NULL,
+                    is_dyc_target BOOLEAN NOT NULL DEFAULT false,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(account_id, provider_folder_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_mailbox_folder_account
+                ON mailbox_folder(account_id)
                 """
             )
         connection.commit()
@@ -710,6 +762,158 @@ async def _list_mail_folders(
     return payload.get("value", [])
 
 
+def _persist_folder_inventory(account_id: str, folders: list[dict[str, Any]]) -> None:
+    if not _database_url():
+        return
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                for folder in folders:
+                    cursor.execute(
+                        """
+                        INSERT INTO mailbox_folder (
+                            id,
+                            account_id,
+                            provider_folder_id,
+                            display_name,
+                            canonical_name,
+                            parent_folder_id,
+                            child_folder_count,
+                            total_item_count,
+                            unread_item_count,
+                            is_hidden,
+                            ownership,
+                            routing_state,
+                            folder_role,
+                            is_dyc_target
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (account_id, provider_folder_id) DO UPDATE
+                        SET display_name = EXCLUDED.display_name,
+                            canonical_name = EXCLUDED.canonical_name,
+                            parent_folder_id = EXCLUDED.parent_folder_id,
+                            child_folder_count = EXCLUDED.child_folder_count,
+                            total_item_count = EXCLUDED.total_item_count,
+                            unread_item_count = EXCLUDED.unread_item_count,
+                            is_hidden = EXCLUDED.is_hidden,
+                            ownership = EXCLUDED.ownership,
+                            routing_state = EXCLUDED.routing_state,
+                            folder_role = EXCLUDED.folder_role,
+                            is_dyc_target = EXCLUDED.is_dyc_target,
+                            updated_at = now()
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            account_id,
+                            folder.get("id"),
+                            folder.get("displayName") or "",
+                            folder.get("canonical_name") or folder.get("displayName") or "",
+                            folder.get("parentFolderId"),
+                            int(folder.get("childFolderCount") or 0),
+                            int(folder.get("totalItemCount") or 0),
+                            int(folder.get("unreadItemCount") or 0),
+                            bool(folder.get("isHidden") or False),
+                            folder.get("ownership") or "manual",
+                            folder.get("routing_state") or "observed",
+                            folder.get("folder_role") or "manual",
+                            bool(folder.get("is_dyc_target") or False),
+                        ),
+                    )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist mailbox folder inventory to PostgreSQL.",
+        ) from exc
+
+
+def _load_folder_inventory(account_id: str) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        provider_folder_id,
+                        display_name,
+                        canonical_name,
+                        parent_folder_id,
+                        child_folder_count,
+                        total_item_count,
+                        unread_item_count,
+                        is_hidden,
+                        ownership,
+                        routing_state,
+                        folder_role,
+                        is_dyc_target
+                    FROM mailbox_folder
+                    WHERE account_id = %s
+                    ORDER BY display_name ASC
+                    """,
+                    (account_id,),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load mailbox folder inventory from PostgreSQL.",
+        ) from exc
+
+    return [
+        {
+            "id": row[0],
+            "displayName": row[1],
+            "canonical_name": row[2],
+            "parentFolderId": row[3],
+            "childFolderCount": row[4],
+            "totalItemCount": row[5],
+            "unreadItemCount": row[6],
+            "isHidden": row[7],
+            "ownership": row[8],
+            "routing_state": row[9],
+            "folder_role": row[10],
+            "is_dyc_target": row[11],
+        }
+        for row in rows
+    ]
+
+
+async def _ensure_default_mail_folders(access_token: str) -> list[dict[str, Any]]:
+    existing_folders = await _list_mail_folders(access_token, include_hidden=False)
+    existing_by_name = {
+        folder.get("displayName", "").casefold(): folder for folder in existing_folders
+    }
+
+    ensured: list[dict[str, Any]] = []
+    for folder_spec in DEFAULT_MVP_FOLDER_SPECS:
+        candidate_names = (folder_spec["name"], *folder_spec["aliases"])
+        current = None
+        for candidate_name in candidate_names:
+            current = existing_by_name.get(candidate_name.casefold())
+            if current:
+                break
+        if current:
+            ensured.append(current)
+            continue
+        created = await _graph_post(
+            access_token,
+            "/me/mailFolders",
+            {"displayName": folder_spec["name"]},
+        )
+        ensured.append(created)
+    return ensured
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -834,6 +1038,65 @@ async def mail_folders(
     folders = _annotate_folders(
         await _list_mail_folders(access_token, include_hidden=include_hidden)
     )
+    return {
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "folders": folders,
+    }
+
+
+@app.post("/mail/folders/bootstrap")
+async def bootstrap_mail_folders(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    access_token, account = await _graph_access_token_for_email(linked_email)
+    folders = _annotate_folders(await _ensure_default_mail_folders(access_token))
+    _persist_folder_inventory(account["account_id"], folders)
+    return {
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "ensured_folders": folders,
+    }
+
+
+@app.post("/mail/folders/inventory/sync")
+async def sync_mail_folder_inventory(
+    include_hidden: bool = Query(default=True),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    access_token, account = await _graph_access_token_for_email(linked_email)
+    folders = _annotate_folders(
+        await _list_mail_folders(access_token, include_hidden=include_hidden)
+    )
+    _persist_folder_inventory(account["account_id"], folders)
+    return {
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "folders": folders,
+    }
+
+
+@app.get("/mail/folders/inventory")
+async def mail_folder_inventory(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    account = _load_account_credentials(linked_email)
+    folders = _load_folder_inventory(account["account_id"])
     return {
         "account": {
             "email": account["email"],
