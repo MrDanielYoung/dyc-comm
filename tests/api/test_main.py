@@ -395,3 +395,274 @@ def test_mail_folders_requires_session(monkeypatch):
     response = test_client.get("/mail/folders")
     assert response.status_code == 401
     assert response.json()["detail"] == "No linked account session found."
+
+
+def test_bootstrap_mail_folders_ensures_defaults(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    persisted_inventory: list[tuple[str, list[dict[str, object]]]] = []
+
+    async def fake_graph_access_token_for_email(email: str):
+        assert email == "daniel@danielyoung.io"
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_ensure_default_mail_folders(access_token: str):
+        assert access_token == "graph-token"
+        return [
+            {"id": "review-id", "displayName": "10 - Review"},
+            {"id": "news-id", "displayName": "20 - News"},
+        ]
+
+    monkeypatch.setattr(
+        main, "_graph_access_token_for_email", fake_graph_access_token_for_email
+    )
+    monkeypatch.setattr(main, "_ensure_default_mail_folders", fake_ensure_default_mail_folders)
+    monkeypatch.setattr(
+        main,
+        "_persist_folder_inventory",
+        lambda account_id, folders: persisted_inventory.append((account_id, folders)),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.post(
+        "/mail/folders/bootstrap",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account"] == {
+        "email": "daniel@danielyoung.io",
+        "display_name": "Daniel Young",
+    }
+    assert body["ensured_folders"] == [
+        {
+            "id": "review-id",
+            "displayName": "10 - Review",
+            "ownership": "dyc_managed",
+            "routing_state": "active",
+            "folder_role": "10 - Review",
+            "is_dyc_target": True,
+            "canonical_name": "10 - Review",
+        },
+        {
+            "id": "news-id",
+            "displayName": "20 - News",
+            "ownership": "dyc_managed",
+            "routing_state": "active",
+            "folder_role": "20 - News",
+            "is_dyc_target": True,
+            "canonical_name": "20 - News",
+        },
+    ]
+    assert persisted_inventory
+    assert persisted_inventory[0][0] == "account-123"
+
+
+def test_bootstrap_mail_folders_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.post("/mail/folders/bootstrap")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_ensure_default_mail_folders_creates_missing_only(monkeypatch):
+    existing_folders = [
+        {"id": "review-id", "displayName": "Review"},
+        {"id": "news-id", "displayName": "News"},
+        {"id": "linkedin-id", "displayName": "LinkedIn"},
+    ]
+    created_payloads: list[dict[str, str]] = []
+
+    async def fake_list_mail_folders(access_token: str, include_hidden: bool = False):
+        assert access_token == "graph-token"
+        assert include_hidden is False
+        return existing_folders
+
+    async def fake_graph_post(access_token: str, path: str, payload: dict[str, str]):
+        assert access_token == "graph-token"
+        assert path == "/me/mailFolders"
+        created_payloads.append(payload)
+        return {"id": "created-id", "displayName": payload["displayName"]}
+
+    monkeypatch.setattr(main, "_list_mail_folders", fake_list_mail_folders)
+    monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+
+    import asyncio
+
+    result = asyncio.run(main._ensure_default_mail_folders("graph-token"))
+
+    assert result == [
+        {"id": "review-id", "displayName": "Review"},
+        {"id": "news-id", "displayName": "News"},
+        {"id": "linkedin-id", "displayName": "LinkedIn"},
+        {"id": "created-id", "displayName": "40 - Notifications"},
+        {"id": "created-id", "displayName": "50 - Marketing"},
+        {"id": "created-id", "displayName": "60 - Notes"},
+        {"id": "created-id", "displayName": "70 - Contracts"},
+        {"id": "created-id", "displayName": "80 - Travel"},
+        {"id": "created-id", "displayName": "90 - IT Reports"},
+    ]
+    assert created_payloads == [
+        {"displayName": "40 - Notifications"},
+        {"displayName": "50 - Marketing"},
+        {"displayName": "60 - Notes"},
+        {"displayName": "70 - Contracts"},
+        {"displayName": "80 - Travel"},
+        {"displayName": "90 - IT Reports"},
+    ]
+
+
+def test_sync_mail_folder_inventory_persists_annotated_folders(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    persisted_inventory: list[tuple[str, list[dict[str, object]]]] = []
+
+    async def fake_graph_access_token_for_email(email: str):
+        assert email == "daniel@danielyoung.io"
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_list_mail_folders(access_token: str, include_hidden: bool = False):
+        assert access_token == "graph-token"
+        assert include_hidden is True
+        return [
+            {"id": "wolt-id", "displayName": "Wolt"},
+            {"id": "review-id", "displayName": "10 - Review"},
+        ]
+
+    monkeypatch.setattr(
+        main, "_graph_access_token_for_email", fake_graph_access_token_for_email
+    )
+    monkeypatch.setattr(main, "_list_mail_folders", fake_list_mail_folders)
+    monkeypatch.setattr(
+        main,
+        "_persist_folder_inventory",
+        lambda account_id, folders: persisted_inventory.append((account_id, folders)),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.post(
+        "/mail/folders/inventory/sync",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["folders"] == [
+        {
+            "id": "wolt-id",
+            "displayName": "Wolt",
+            "ownership": "legacy_rule",
+            "routing_state": "protected",
+            "folder_role": "legacy_rule",
+            "is_dyc_target": False,
+            "canonical_name": "Wolt",
+        },
+        {
+            "id": "review-id",
+            "displayName": "10 - Review",
+            "ownership": "dyc_managed",
+            "routing_state": "active",
+            "folder_role": "10 - Review",
+            "is_dyc_target": True,
+            "canonical_name": "10 - Review",
+        },
+    ]
+    assert persisted_inventory
+    assert persisted_inventory[0][0] == "account-123"
+
+
+def test_mail_folder_inventory_returns_persisted_rows(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    monkeypatch.setattr(
+        main,
+        "_load_account_credentials",
+        lambda email: {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "_load_folder_inventory",
+        lambda account_id: [
+            {
+                "id": "wolt-id",
+                "displayName": "Wolt",
+                "ownership": "legacy_rule",
+                "routing_state": "protected",
+                "folder_role": "legacy_rule",
+                "is_dyc_target": False,
+                "canonical_name": "Wolt",
+            }
+        ],
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/mail/folders/inventory",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account": {
+            "email": "daniel@danielyoung.io",
+            "display_name": "Daniel Young",
+        },
+        "folders": [
+            {
+                "id": "wolt-id",
+                "displayName": "Wolt",
+                "ownership": "legacy_rule",
+                "routing_state": "protected",
+                "folder_role": "legacy_rule",
+                "is_dyc_target": False,
+                "canonical_name": "Wolt",
+            }
+        ],
+    }
+
+
+def test_mail_folder_inventory_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.get("/mail/folders/inventory")
+    assert response.status_code == 401
+
+
+def test_cli_build_parser_dispatches_subcommands():
+    from apps.api.app import cli
+
+    parser = cli.build_parser()
+
+    folders_args = parser.parse_args(["folders", "--include-hidden"])
+    assert folders_args.func is cli.cmd_folders
+    assert folders_args.include_hidden is True
+
+    bootstrap_args = parser.parse_args(["bootstrap"])
+    assert bootstrap_args.func is cli.cmd_bootstrap
+
+    inventory_args = parser.parse_args(["inventory"])
+    assert inventory_args.func is cli.cmd_inventory
+
+    sync_args = parser.parse_args(["inventory-sync"])
+    assert sync_args.func is cli.cmd_inventory_sync
+    assert sync_args.include_hidden is True
+
+    status_args = parser.parse_args(["status"])
+    assert status_args.func is cli.cmd_status
+
+    session_args = parser.parse_args(["session"])
+    assert session_args.func is cli.cmd_session
+
+    auth_args = parser.parse_args(["auth-url"])
+    assert auth_args.func is cli.cmd_auth_url
