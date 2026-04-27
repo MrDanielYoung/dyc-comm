@@ -236,9 +236,7 @@ async def _graph_get(
     return response.json()
 
 
-async def _graph_post(
-    access_token: str, path: str, payload: dict[str, Any]
-) -> dict[str, Any]:
+async def _graph_post(access_token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",

@@ -157,9 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     inventory = subparsers.add_parser("inventory", help="Show persisted folder inventory")
     inventory.set_defaults(func=cmd_inventory)
 
-    inventory_sync = subparsers.add_parser(
-        "inventory-sync", help="Sync live folder inventory"
-    )
+    inventory_sync = subparsers.add_parser("inventory-sync", help="Sync live folder inventory")
     inventory_sync.add_argument(
         "--include-hidden",
         action="store_true",
@@ -171,9 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap = subparsers.add_parser("bootstrap", help="Ensure DYC folders exist")
     bootstrap.set_defaults(func=cmd_bootstrap)
 
-    auth_url = subparsers.add_parser(
-        "auth-url", help="Print the Microsoft auth URL from the API"
-    )
+    auth_url = subparsers.add_parser("auth-url", help="Print the Microsoft auth URL from the API")
     auth_url.set_defaults(func=cmd_auth_url)
 
     return parser

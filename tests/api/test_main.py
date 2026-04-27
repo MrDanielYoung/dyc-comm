@@ -416,9 +416,7 @@ def test_bootstrap_mail_folders_ensures_defaults(monkeypatch):
             {"id": "news-id", "displayName": "20 - News"},
         ]
 
-    monkeypatch.setattr(
-        main, "_graph_access_token_for_email", fake_graph_access_token_for_email
-    )
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_graph_access_token_for_email)
     monkeypatch.setattr(main, "_ensure_default_mail_folders", fake_ensure_default_mail_folders)
     monkeypatch.setattr(
         main,
@@ -537,9 +535,7 @@ def test_sync_mail_folder_inventory_persists_annotated_folders(monkeypatch):
             {"id": "review-id", "displayName": "10 - Review"},
         ]
 
-    monkeypatch.setattr(
-        main, "_graph_access_token_for_email", fake_graph_access_token_for_email
-    )
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_graph_access_token_for_email)
     monkeypatch.setattr(main, "_list_mail_folders", fake_list_mail_folders)
     monkeypatch.setattr(
         main,
