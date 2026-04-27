@@ -35,10 +35,15 @@ Endpoints currently exposed by `apps/api/app/main.py` on `main`:
 
 - `GET /health`
 - `GET /config-check`
+- `GET /auth/session`
+- `GET /auth/microsoft/start`
+- `GET /auth/microsoft/callback`
+- `POST /auth/logout`
+- `GET /mail/folders` — live Microsoft Graph fetch, requires a linked
+  account session and DB-backed tokens.
 
-> Authentication endpoints (Microsoft Entra OAuth flow) are planned but not
-> yet on `main`. When that slice lands, this document and the env template
-> will be updated together.
+> The Microsoft Entra OAuth flow is wired up. DB-backed mailbox folder
+> bootstrap/sync/inventory endpoints remain a follow-up slice.
 
 ### Required environment variables
 
@@ -51,7 +56,10 @@ These mirror `apps/api/.env.example` and `infra/azure/api-runtime-settings.env.e
 | `MICROSOFT_ENTRA_CLIENT_ID` | Entra app registration client id. |
 | `MICROSOFT_ENTRA_TENANT_ID` | Entra tenant id. |
 | `MICROSOFT_ENTRA_CLIENT_SECRET` | Entra client secret. Treat as a secret. |
-| `MICROSOFT_ENTRA_REDIRECT_URI` | OAuth callback URL (planned auth slice). |
+| `MICROSOFT_ENTRA_REDIRECT_URI` | OAuth callback URL the API serves. |
+| `WEB_APP_URL` | Public origin of the web shell; OAuth callback redirects here. |
+| `API_BASE_URL` | Public origin of the API; reported by `/config-check`. |
+| `ALLOWED_ORIGINS` | Optional comma-separated CORS allowlist. Defaults to `WEB_APP_URL`. |
 | `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Key Vault refs. |
 
 The Entra values are seeded now so the API container can boot with the same
