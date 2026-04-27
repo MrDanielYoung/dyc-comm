@@ -141,11 +141,14 @@ laptop, the repo also ships a manual-only workflow:
 
 - [`.github/workflows/configure-api-runtime.yml`](../.github/workflows/configure-api-runtime.yml)
   — `workflow_dispatch`-only. Runs in the `production` GitHub Environment,
-  authenticates to Azure via OIDC (`azure/login@v2`), reads the runtime
-  secrets from Azure Key Vault (`dyc-comm-prod-kv`), then issues a single
+  authenticates to Azure via OIDC (`azure/login@v2`), then runs a single
+  Azure CLI step that reads the runtime secrets from Azure Key Vault
+  (`dyc-comm-prod-kv`) into local shell variables and issues
   `az containerapp update --set-env-vars` against
   `dyc-comm-prod-api`/`dyc-comm-prod-rg` with the variable shape
-  documented above.
+  documented above. Secret values stay in-memory inside that single
+  step and are never written to `$GITHUB_ENV` or otherwise exported
+  across steps.
 
 Key Vault is the source of truth for secret values. The workflow does
 not require duplicate GitHub secrets for `DATABASE_URL` or any
@@ -180,8 +183,9 @@ Non-secret URLs (`MICROSOFT_ENTRA_REDIRECT_URI`, `WEB_APP_URL`,
 `API_BASE_URL`, `ALLOWED_ORIGINS`), `APP_ENV`, and the Key Vault name
 are committed in the workflow `env` block so the production runtime
 contract is visible in code review. Secret values fetched from Key
-Vault are masked with `::add-mask::` and only flow between steps via
-`$GITHUB_ENV`; they are never echoed in logs.
+Vault are masked with `::add-mask::` and stay in local shell variables
+inside a single Azure CLI step; they are not written to `$GITHUB_ENV`
+or echoed in logs.
 
 Because the workflow currently materializes secret values into plain
 Container App env vars (rather than wiring Container App Key Vault
