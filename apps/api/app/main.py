@@ -467,14 +467,21 @@ def _persist_microsoft_account(
                     ON CONFLICT (provider, provider_account_id) DO UPDATE
                     SET email_address = EXCLUDED.email_address,
                         display_name = EXCLUDED.display_name,
-                        access_token = COALESCE(EXCLUDED.access_token, connected_account.access_token),
-                        refresh_token = COALESCE(EXCLUDED.refresh_token, connected_account.refresh_token),
+                        access_token = COALESCE(
+                            EXCLUDED.access_token,
+                            connected_account.access_token
+                        ),
+                        refresh_token = COALESCE(
+                            EXCLUDED.refresh_token,
+                            connected_account.refresh_token
+                        ),
                         access_token_expires_at = COALESCE(
                             EXCLUDED.access_token_expires_at,
                             connected_account.access_token_expires_at
                         ),
                         token_updated_at = CASE
-                            WHEN EXCLUDED.access_token IS NOT NULL OR EXCLUDED.refresh_token IS NOT NULL
+                            WHEN EXCLUDED.access_token IS NOT NULL
+                                OR EXCLUDED.refresh_token IS NOT NULL
                                 THEN now()
                             ELSE connected_account.token_updated_at
                         END,
