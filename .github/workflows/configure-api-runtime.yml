@@ -1,0 +1,68 @@
+name: Configure API Runtime
+
+# Manual-only workflow that pushes the documented runtime env vars onto the
+# production API Container App. Secret values are sourced from GitHub
+# Actions secrets (or, preferably, Azure Key Vault references applied to
+# the Container App out-of-band) and are never echoed in logs.
+#
+# See docs/azure-runtime-config.md for the contract this workflow honors.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: configure-api-runtime
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: dyc-comm-prod-rg
+  CONTAINER_APP_NAME: dyc-comm-prod-api
+  MICROSOFT_ENTRA_REDIRECT_URI: https://api.comm.danielyoung.io/auth/microsoft/callback
+  WEB_APP_URL: https://comm.danielyoung.io
+  API_BASE_URL: https://api.comm.danielyoung.io
+  ALLOWED_ORIGINS: https://comm.danielyoung.io
+
+jobs:
+  configure-runtime:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply API runtime settings
+        uses: azure/cli@v2
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MICROSOFT_ENTRA_CLIENT_ID: ${{ secrets.MICROSOFT_ENTRA_CLIENT_ID }}
+          MICROSOFT_ENTRA_TENANT_ID: ${{ secrets.MICROSOFT_ENTRA_TENANT_ID }}
+          MICROSOFT_ENTRA_CLIENT_SECRET: ${{ secrets.MICROSOFT_ENTRA_CLIENT_SECRET }}
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az containerapp update \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --set-env-vars \
+                APP_ENV=production \
+                DATABASE_URL="$DATABASE_URL" \
+                MICROSOFT_ENTRA_CLIENT_ID="$MICROSOFT_ENTRA_CLIENT_ID" \
+                MICROSOFT_ENTRA_TENANT_ID="$MICROSOFT_ENTRA_TENANT_ID" \
+                MICROSOFT_ENTRA_CLIENT_SECRET="$MICROSOFT_ENTRA_CLIENT_SECRET" \
+                MICROSOFT_ENTRA_REDIRECT_URI="$MICROSOFT_ENTRA_REDIRECT_URI" \
+                WEB_APP_URL="$WEB_APP_URL" \
+                API_BASE_URL="$API_BASE_URL" \
+                ALLOWED_ORIGINS="$ALLOWED_ORIGINS" \
+                KEY_VAULT_REFS_ENABLED=true \
+              --output none

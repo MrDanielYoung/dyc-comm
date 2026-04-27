@@ -134,13 +134,52 @@ Defaults:
 Prerequisites: Azure CLI authenticated against the right subscription
 (`az login`), permission to update the target Container App, and Bash 4+.
 
+## Applying runtime settings via GitHub Actions
+
+For runs that should be auditable in CI rather than executed from a
+laptop, the repo also ships a manual-only workflow:
+
+- [`.github/workflows/configure-api-runtime.yml`](../.github/workflows/configure-api-runtime.yml)
+  — `workflow_dispatch`-only. Runs in the `production` GitHub Environment,
+  authenticates to Azure via OIDC (`azure/login@v2`), then issues a single
+  `az containerapp update --set-env-vars` against
+  `dyc-comm-prod-api`/`dyc-comm-prod-rg` with the same variable shape
+  documented above.
+
+Required secrets (configure on the `production` environment, not as
+plain repo secrets):
+
+| Secret | Source |
+| --- | --- |
+| `AZURE_CLIENT_ID` | OIDC federated credential for the deploy app registration. |
+| `AZURE_TENANT_ID` | Entra tenant id. |
+| `AZURE_SUBSCRIPTION_ID` | Target Azure subscription. |
+| `DATABASE_URL` | Postgres connection string. Prefer a Key Vault reference applied out-of-band; only set as a GitHub secret as an interim. |
+| `MICROSOFT_ENTRA_CLIENT_ID` | Entra app client id. |
+| `MICROSOFT_ENTRA_TENANT_ID` | Entra tenant id. |
+| `MICROSOFT_ENTRA_CLIENT_SECRET` | Entra client secret. Same Key Vault preference as `DATABASE_URL`. |
+
+Non-secret URLs (`MICROSOFT_ENTRA_REDIRECT_URI`, `WEB_APP_URL`,
+`API_BASE_URL`, `ALLOWED_ORIGINS`) and `APP_ENV` /
+`KEY_VAULT_REFS_ENABLED` are committed in the workflow `env` block so the
+production runtime contract is visible in code review. Secret values are
+referenced via `secrets.*`, exposed to the step only through `env:`, and
+never echoed in logs.
+
+Trigger this workflow only when a runtime change is intentional. Trigger
+it from the GitHub Actions UI on `main` (or another reviewed branch) so a
+misconfigured branch cannot push values to production. The local
+`apply-api-settings.sh` path remains supported for ad-hoc operator use.
+
 ## What is intentionally not automated
 
-The GitHub workflows in `.github/workflows/` build and deploy code and
-images, but they do **not** push API runtime values to the Container App.
-Until a vetted runtime-config workflow lands, runtime settings are applied
-manually with `infra/azure/apply-api-settings.sh` so a misconfigured run
-cannot blank or overwrite production settings.
+Neither the build/deploy workflows nor `configure-api-runtime.yml` runs
+on push. Runtime updates are gated behind explicit `workflow_dispatch`
+invocation so a regular `main` merge cannot blank or overwrite production
+settings, and no workflow rotates secrets — Entra client secrets and the
+database connection string are managed in their authoritative stores
+(ideally Key Vault) and only mirrored into GitHub Environment secrets as
+an interim while Key Vault refs are still being wired up.
 
 ## Verification
 
