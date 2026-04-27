@@ -31,7 +31,25 @@ jobs:
         run: ruff check apps tests
 
       - name: Format check (ruff format)
-        run: ruff format --check apps tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          ruff format --check --diff apps tests > /tmp/fmt.diff 2>&1
+          rc=$?
+          if [ $rc -ne 0 ] && [ -n "${{ github.event.pull_request.number }}" ]; then
+            {
+              echo '## ruff format diff (auto-posted)'
+              echo
+              echo '```diff'
+              head -c 60000 /tmp/fmt.diff
+              echo '```'
+            } > /tmp/comment.md
+            gh pr comment ${{ github.event.pull_request.number }} \
+              --repo ${{ github.repository }} \
+              --body-file /tmp/comment.md || true
+          fi
+          exit $rc
 
       - name: Run tests
         run: pytest
