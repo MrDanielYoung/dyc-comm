@@ -1,0 +1,51 @@
+--- apps/api/app/main.py
++++ apps/api/app/main.py
+@@ -17,9 +17,7 @@
+ PKCE_COOKIE = "dyc_auth_pkce"
+ EMAIL_COOKIE = "dyc_account_email"
+ NAME_COOKIE = "dyc_account_name"
+-MICROSOFT_SCOPE = (
+-    "openid profile email offline_access User.Read Mail.Read Mail.ReadWrite"
+-)
++MICROSOFT_SCOPE = "openid profile email offline_access User.Read Mail.Read Mail.ReadWrite"
+ MICROSOFT_PROVIDER = "microsoft_365"
+ DEFAULT_LEGACY_RULE_FOLDER_NAMES = ("Wolt", "Amazon", "Komote", "Cycle Touring")
+ SYSTEM_FOLDER_NAMES = (
+@@ -284,9 +282,7 @@
+             "canonical_name": folder_spec["name"],
+         }
+ 
+-    if _fold_name(display_name) in {
+-        _fold_name(name) for name in settings.legacy_rule_folder_names
+-    }:
++    if _fold_name(display_name) in {_fold_name(name) for name in settings.legacy_rule_folder_names}:
+         return {
+             "ownership": "legacy_rule",
+             "routing_state": "protected",
+@@ -330,9 +326,7 @@
+ 
+ def _extract_account_identity(profile: dict[str, Any]) -> tuple[str, str, str]:
+     email = (
+-        profile.get("mail")
+-        or profile.get("userPrincipalName")
+-        or profile.get("preferred_username")
++        profile.get("mail") or profile.get("userPrincipalName") or profile.get("preferred_username")
+     )
+     if not email:
+         raise HTTPException(status_code=502, detail="Missing email in Graph profile.")
+
+--- tests/api/test_main.py
++++ tests/api/test_main.py
+@@ -272,9 +272,7 @@
+     )
+ 
+     assert response.status_code == 302
+-    assert response.headers["location"] == (
+-        "http://localhost:3000/?auth=error&reason=No+consent"
+-    )
++    assert response.headers["location"] == ("http://localhost:3000/?auth=error&reason=No+consent")
+ 
+ 
+ def test_microsoft_callback_rejects_state_mismatch(monkeypatch):
+
+2 files would be reformatted, 5 files already formatted
