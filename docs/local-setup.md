@@ -70,7 +70,9 @@ See `apps/api/.env.example` for the full list. Summary:
   are gitignored. Copy from the corresponding `.example` file and fill in
   real values locally.
 - Production reads secrets from Azure Key Vault via Container Apps refs.
-  Set `KEY_VAULT_REFS_ENABLED=true` so `/config-check` reflects that.
+  Set `KEY_VAULT_REFS_ENABLED=true` so `/config-check` reflects that. See
+  [`docs/azure-runtime-config.md`](azure-runtime-config.md) for the
+  Container App settings inventory and the apply helper.
 - The MCP agent config (`.mcp.json`) takes a bearer token via the
   `AUTH_TOKEN` environment variable. The committed template
   (`.mcp.json.example`) intentionally contains no literal token.

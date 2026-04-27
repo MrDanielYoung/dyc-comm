@@ -2,6 +2,8 @@
 
 Standalone helpers for managing the production Azure Container Apps deployment of the DYC Comm API. These scripts wrap `az` CLI calls so runtime configuration changes are explicit, reviewable, and reproducible instead of being applied ad hoc through the Azure Portal.
 
+For the broader runtime configuration design (target apps, env var inventory, Key Vault reference approach, verification checklist), see [`docs/azure-runtime-config.md`](../../docs/azure-runtime-config.md).
+
 ## Files
 
 * `api-runtime-settings.env.example` — template listing the environment variables the API container app expects at runtime. Copy to a private, gitignored file (e.g. `api-runtime-settings.env`) and fill in real values before applying.
