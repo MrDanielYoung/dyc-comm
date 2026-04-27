@@ -13,6 +13,7 @@ This repository now includes:
 * `.github/workflows/ci.yml`
 * `.github/workflows/deploy-web.yml`
 * `.github/workflows/deploy-api.yml`
+* `.github/workflows/configure-api-runtime.yml`
 
 ### CI
 
@@ -42,6 +43,10 @@ Both workflows:
 * build images from repo Dockerfiles
 * push images to `dyccommprodacr`
 * update the target Azure Container App with the new image
+
+Build hygiene:
+
+* app-specific `.dockerignore` files keep local caches, virtual environments, and test files out of production image contexts
 
 ## Azure Identity For GitHub Actions
 
@@ -78,9 +83,14 @@ Add these repository secrets:
 * `AZURE_SUBSCRIPTION_ID`
 * `REGISTRY_USERNAME`
 * `REGISTRY_PASSWORD`
+* `DATABASE_URL`
+* `MICROSOFT_ENTRA_CLIENT_ID`
+* `MICROSOFT_ENTRA_TENANT_ID`
+* `MICROSOFT_ENTRA_CLIENT_SECRET`
 
 These correspond to the GitHub deployment identity, not the Microsoft Graph user-login app.
 The registry secrets come from the Azure Container Registry access keys page.
+The Microsoft Entra and database secrets are consumed by `configure-api-runtime.yml` when applying API runtime settings.
 
 ## GitHub Repository Settings
 
@@ -116,8 +126,22 @@ The workflows will deploy images, but the API container app still needs real run
 * `MICROSOFT_ENTRA_TENANT_ID`
 * `MICROSOFT_ENTRA_CLIENT_SECRET`
 * `MICROSOFT_ENTRA_REDIRECT_URI`
+* `WEB_APP_URL`
+* `API_BASE_URL`
+* `ALLOWED_ORIGINS`
 
 Prefer Key Vault references once the app config is wired.
+
+Recommended initial values:
+
+* `WEB_APP_URL=https://comm.danielyoung.io`
+* `API_BASE_URL=https://api.comm.danielyoung.io`
+* `ALLOWED_ORIGINS=https://comm.danielyoung.io`
+
+See also:
+
+* `apps/api/.env.example`
+* `infra/azure/api-runtime-settings.env.example`
 
 ## Verification Checklist
 
