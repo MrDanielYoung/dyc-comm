@@ -171,7 +171,14 @@ non-empty):
 | `DATABASE_URL` | `PGdb-URL` |
 | `MICROSOFT_ENTRA_CLIENT_ID` | `microsoft-entra-client-id` |
 | `MICROSOFT_ENTRA_TENANT_ID` | `microsoft-entra-tenant-id` |
-| `MICROSOFT_ENTRA_CLIENT_SECRET` | `microsoft-entra-client-secret` |
+| `MICROSOFT_ENTRA_CLIENT_SECRET` | `dyc-comm-prod-value` |
+
+> **Warning:** `MICROSOFT_ENTRA_CLIENT_SECRET` must be sourced from the
+> Key Vault secret holding the Entra client secret **value**
+> (`dyc-comm-prod-value`), not the Entra secret **ID**
+> (`dyc-comm-prod-sid`). Microsoft OAuth fails with `AADSTS7000215`
+> ("Invalid client secret provided") when the secret ID is deployed in
+> place of the secret value.
 
 The OIDC principal used by `AZURE_CLIENT_ID` must hold a Key Vault
 access policy or RBAC role that grants `get` on secrets in
