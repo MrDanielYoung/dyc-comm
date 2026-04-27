@@ -60,7 +60,7 @@ These mirror `apps/api/.env.example` and `infra/azure/api-runtime-settings.env.e
 | `WEB_APP_URL` | Public origin of the web shell; OAuth callback redirects here. |
 | `API_BASE_URL` | Public origin of the API; reported by `/config-check`. |
 | `ALLOWED_ORIGINS` | Optional comma-separated CORS allowlist. Defaults to `WEB_APP_URL`. |
-| `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Key Vault refs. |
+| `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Container App Key Vault refs; `false` when the workflow copies values from Key Vault into plain Container App env vars. |
 
 The Entra values are seeded now so the API container can boot with the same
 configuration shape across environments and so `/config-check` can report
@@ -141,30 +141,53 @@ laptop, the repo also ships a manual-only workflow:
 
 - [`.github/workflows/configure-api-runtime.yml`](../.github/workflows/configure-api-runtime.yml)
   — `workflow_dispatch`-only. Runs in the `production` GitHub Environment,
-  authenticates to Azure via OIDC (`azure/login@v2`), then issues a single
+  authenticates to Azure via OIDC (`azure/login@v2`), reads the runtime
+  secrets from Azure Key Vault (`dyc-comm-prod-kv`), then issues a single
   `az containerapp update --set-env-vars` against
-  `dyc-comm-prod-api`/`dyc-comm-prod-rg` with the same variable shape
+  `dyc-comm-prod-api`/`dyc-comm-prod-rg` with the variable shape
   documented above.
 
-Required secrets (configure on the `production` environment, not as
-plain repo secrets):
+Key Vault is the source of truth for secret values. The workflow does
+not require duplicate GitHub secrets for `DATABASE_URL` or any
+`MICROSOFT_ENTRA_*` value.
+
+Required GitHub secrets (configure on the `production` environment, not
+as plain repo secrets):
 
 | Secret | Source |
 | --- | --- |
 | `AZURE_CLIENT_ID` | OIDC federated credential for the deploy app registration. |
 | `AZURE_TENANT_ID` | Entra tenant id. |
 | `AZURE_SUBSCRIPTION_ID` | Target Azure subscription. |
-| `DATABASE_URL` | Postgres connection string. Prefer a Key Vault reference applied out-of-band; only set as a GitHub secret as an interim. |
-| `MICROSOFT_ENTRA_CLIENT_ID` | Entra app client id. |
-| `MICROSOFT_ENTRA_TENANT_ID` | Entra tenant id. |
-| `MICROSOFT_ENTRA_CLIENT_SECRET` | Entra client secret. Same Key Vault preference as `DATABASE_URL`. |
+
+Required Key Vault secrets in `dyc-comm-prod-kv` (must be enabled and
+non-empty):
+
+| Container App env var | Key Vault secret name |
+| --- | --- |
+| `DATABASE_URL` | `database-url` |
+| `MICROSOFT_ENTRA_CLIENT_ID` | `microsoft-entra-client-id` |
+| `MICROSOFT_ENTRA_TENANT_ID` | `microsoft-entra-tenant-id` |
+| `MICROSOFT_ENTRA_CLIENT_SECRET` | `microsoft-entra-client-secret` |
+
+The OIDC principal used by `AZURE_CLIENT_ID` must hold a Key Vault
+access policy or RBAC role that grants `get` on secrets in
+`dyc-comm-prod-kv` (for example, `Key Vault Secrets User`). If a
+required Key Vault secret is missing, disabled, or empty the workflow
+fails before it touches the Container App.
 
 Non-secret URLs (`MICROSOFT_ENTRA_REDIRECT_URI`, `WEB_APP_URL`,
-`API_BASE_URL`, `ALLOWED_ORIGINS`) and `APP_ENV` /
-`KEY_VAULT_REFS_ENABLED` are committed in the workflow `env` block so the
-production runtime contract is visible in code review. Secret values are
-referenced via `secrets.*`, exposed to the step only through `env:`, and
-never echoed in logs.
+`API_BASE_URL`, `ALLOWED_ORIGINS`), `APP_ENV`, and the Key Vault name
+are committed in the workflow `env` block so the production runtime
+contract is visible in code review. Secret values fetched from Key
+Vault are masked with `::add-mask::` and only flow between steps via
+`$GITHUB_ENV`; they are never echoed in logs.
+
+Because the workflow currently materializes secret values into plain
+Container App env vars (rather than wiring Container App Key Vault
+secret refs), it sets `KEY_VAULT_REFS_ENABLED=false` to accurately
+reflect that posture. Migrating to first-class Container App Key Vault
+refs is tracked as follow-up work.
 
 Trigger this workflow only when a runtime change is intentional. Trigger
 it from the GitHub Actions UI on `main` (or another reviewed branch) so a
@@ -177,9 +200,8 @@ Neither the build/deploy workflows nor `configure-api-runtime.yml` runs
 on push. Runtime updates are gated behind explicit `workflow_dispatch`
 invocation so a regular `main` merge cannot blank or overwrite production
 settings, and no workflow rotates secrets — Entra client secrets and the
-database connection string are managed in their authoritative stores
-(ideally Key Vault) and only mirrored into GitHub Environment secrets as
-an interim while Key Vault refs are still being wired up.
+database connection string are managed in Azure Key Vault
+(`dyc-comm-prod-kv`) and only read from there at apply time.
 
 ## Verification
 

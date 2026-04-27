@@ -1,9 +1,9 @@
 name: Configure API Runtime
 
 # Manual-only workflow that pushes the documented runtime env vars onto the
-# production API Container App. Secret values are sourced from GitHub
-# Actions secrets (or, preferably, Azure Key Vault references applied to
-# the Container App out-of-band) and are never echoed in logs.
+# production API Container App. Secret values are sourced from Azure Key
+# Vault (dyc-comm-prod-kv) at workflow run time, never from GitHub secrets,
+# and are masked so they are not echoed in logs.
 #
 # See docs/azure-runtime-config.md for the contract this workflow honors.
 
@@ -21,6 +21,7 @@ concurrency:
 env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-api
+  KEY_VAULT_NAME: dyc-comm-prod-kv
   MICROSOFT_ENTRA_REDIRECT_URI: https://api.comm.danielyoung.io/auth/microsoft/callback
   WEB_APP_URL: https://comm.danielyoung.io
   API_BASE_URL: https://api.comm.danielyoung.io
@@ -41,16 +42,54 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Apply API runtime settings
+      - name: Fetch runtime secrets from Key Vault
         uses: azure/cli@v2
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          MICROSOFT_ENTRA_CLIENT_ID: ${{ secrets.MICROSOFT_ENTRA_CLIENT_ID }}
-          MICROSOFT_ENTRA_TENANT_ID: ${{ secrets.MICROSOFT_ENTRA_TENANT_ID }}
-          MICROSOFT_ENTRA_CLIENT_SECRET: ${{ secrets.MICROSOFT_ENTRA_CLIENT_SECRET }}
         with:
           azcliversion: latest
           inlineScript: |
+            set -euo pipefail
+
+            fetch_secret() {
+              local out_name="$1"
+              local kv_name="$2"
+              local value
+              value="$(az keyvault secret show \
+                --vault-name "$KEY_VAULT_NAME" \
+                --name "$kv_name" \
+                --query value \
+                --output tsv)"
+              if [[ -z "${value}" ]]; then
+                echo "::error::Key Vault secret '${kv_name}' in vault '${KEY_VAULT_NAME}' is empty or missing." >&2
+                exit 1
+              fi
+              # Mask the value in logs and export to subsequent steps.
+              echo "::add-mask::${value}"
+              {
+                echo "${out_name}<<__EOF_${out_name}__"
+                echo "${value}"
+                echo "__EOF_${out_name}__"
+              } >> "$GITHUB_ENV"
+            }
+
+            fetch_secret DATABASE_URL database-url
+            fetch_secret MICROSOFT_ENTRA_CLIENT_ID microsoft-entra-client-id
+            fetch_secret MICROSOFT_ENTRA_TENANT_ID microsoft-entra-tenant-id
+            fetch_secret MICROSOFT_ENTRA_CLIENT_SECRET microsoft-entra-client-secret
+
+      - name: Apply API runtime settings
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+
+            for var in DATABASE_URL MICROSOFT_ENTRA_CLIENT_ID MICROSOFT_ENTRA_TENANT_ID MICROSOFT_ENTRA_CLIENT_SECRET; do
+              if [[ -z "${!var:-}" ]]; then
+                echo "::error::Required runtime variable '${var}' is empty before applying Container App settings." >&2
+                exit 1
+              fi
+            done
+
             az containerapp update \
               --name "$CONTAINER_APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \
@@ -64,5 +103,5 @@ jobs:
                 WEB_APP_URL="$WEB_APP_URL" \
                 API_BASE_URL="$API_BASE_URL" \
                 ALLOWED_ORIGINS="$ALLOWED_ORIGINS" \
-                KEY_VAULT_REFS_ENABLED=true \
+                KEY_VAULT_REFS_ENABLED=false \
               --output none
