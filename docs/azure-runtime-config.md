@@ -168,7 +168,7 @@ non-empty):
 
 | Container App env var | Key Vault secret name |
 | --- | --- |
-| `DATABASE_URL` | `PGdb-url` |
+| `DATABASE_URL` | `PGdb-URL` |
 | `MICROSOFT_ENTRA_CLIENT_ID` | `microsoft-entra-client-id` |
 | `MICROSOFT_ENTRA_TENANT_ID` | `microsoft-entra-tenant-id` |
 | `MICROSOFT_ENTRA_CLIENT_SECRET` | `microsoft-entra-client-secret` |
