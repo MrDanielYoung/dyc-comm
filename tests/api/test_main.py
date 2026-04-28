@@ -1,3 +1,5 @@
+import base64
+import json
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -15,9 +17,29 @@ RUNTIME_VARIABLES = (
     "MICROSOFT_ENTRA_CLIENT_SECRET",
     "MICROSOFT_ENTRA_REDIRECT_URI",
     "KEY_VAULT_REFS_ENABLED",
+    "ALLOWED_MICROSOFT_TENANT_IDS",
+    "ALLOWED_ACCOUNT_EMAILS",
 )
 
 SECRET_VARIABLES = {"DATABASE_URL", "MICROSOFT_ENTRA_CLIENT_SECRET"}
+
+DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
+DHW_TENANT = "3dd54b52-c31e-442e-8705-a56b839e59a7"
+UNKNOWN_TENANT = "deadbeef-dead-beef-dead-beefdeadbeef"
+
+
+def _id_token(claims: dict) -> str:
+    """Build a JWT-shaped id_token. Signature is unused — the API decodes
+    the payload only, after a successful confidential-client exchange."""
+
+    def _b64(value: dict | bytes) -> str:
+        if isinstance(value, dict):
+            value = json.dumps(value).encode("utf-8")
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+    header = _b64({"alg": "RS256", "typ": "JWT"})
+    body = _b64(claims)
+    return f"{header}.{body}.signature-not-verified"
 
 
 def _local_settings() -> main.Settings:
@@ -73,6 +95,8 @@ def test_config_check_reflects_set_env(monkeypatch):
     monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_SECRET", secret_value)
     monkeypatch.setenv("MICROSOFT_ENTRA_REDIRECT_URI", redirect_value)
     monkeypatch.setenv("KEY_VAULT_REFS_ENABLED", "true")
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", "tenant-a,tenant-b")
+    monkeypatch.setenv("ALLOWED_ACCOUNT_EMAILS", "a@example.com")
 
     response = client.get("/config-check")
     assert response.status_code == 200
@@ -241,12 +265,18 @@ def test_microsoft_start_propagates_login_hint(monkeypatch):
 
 def test_microsoft_callback_redirects_to_web_on_success(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
     persisted_profiles: list[dict[str, str]] = []
+
+    id_token = _id_token(
+        {"tid": DECODING_OPTIONS_TENANT, "preferred_username": "daniel@danielyoung.io"}
+    )
+    token_payload = {"access_token": "token", "id_token": id_token}
 
     async def fake_exchange(code: str, verifier: str):
         assert code == "sample-code"
         assert verifier == "stored-verifier"
-        return {"access_token": "token"}
+        return token_payload
 
     async def fake_profile(access_token: str):
         assert access_token == "token"
@@ -291,13 +321,320 @@ def test_microsoft_callback_redirects_to_web_on_success(monkeypatch):
                 "mail": "daniel@danielyoung.io",
                 "displayName": "Daniel Young",
             },
-            "token_response": {
-                "access_token": "token",
-            },
+            "token_response": token_payload,
         }
     ]
     assert main.EMAIL_COOKIE in response.cookies
     assert main.NAME_COOKIE in response.cookies
+
+
+def _wire_callback(
+    monkeypatch,
+    *,
+    tid: str,
+    email: str,
+    display_name: str = "Daniel Young",
+):
+    """Wire the callback handler with a synthetic token + Graph profile and
+    return a list that captures any persistence calls. The list must remain
+    empty when the allow-list rejects the sign-in."""
+    persisted: list[dict] = []
+
+    async def fake_exchange(code, verifier):
+        return {
+            "access_token": "token",
+            "id_token": _id_token({"tid": tid, "preferred_username": email}),
+        }
+
+    async def fake_profile(access_token):
+        return {"mail": email, "displayName": display_name}
+
+    def fake_persist(profile, token_response):
+        persisted.append({"profile": profile, "token_response": token_response})
+        return {
+            "email": email,
+            "display_name": display_name,
+            "provider_account_id": "account-id",
+            "has_refresh_token": True,
+        }
+
+    monkeypatch.setattr(main, "_exchange_code", fake_exchange)
+    monkeypatch.setattr(main, "_graph_profile", fake_profile)
+    monkeypatch.setattr(main, "_persist_microsoft_account", fake_persist)
+    return persisted
+
+
+def test_callback_allows_home_tenant_when_only_home_configured(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.delenv("ALLOWED_MICROSOFT_TENANT_IDS", raising=False)
+    monkeypatch.delenv("ALLOWED_ACCOUNT_EMAILS", raising=False)
+    persisted = _wire_callback(
+        monkeypatch, tid=DECODING_OPTIONS_TENANT, email="daniel@danielyoung.io"
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert "auth=success" in response.headers["location"]
+    assert len(persisted) == 1
+
+
+def test_callback_allows_dhw_tenant_when_allow_listed(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
+    )
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS",
+        "daniel@danielyoung.io,daniel.young@digitalhealthworks.com",
+    )
+    persisted = _wire_callback(
+        monkeypatch,
+        tid=DHW_TENANT,
+        email="daniel.young@digitalhealthworks.com",
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert "auth=success" in response.headers["location"]
+    assert len(persisted) == 1
+
+
+def test_callback_rejects_unknown_tenant_and_does_not_persist(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
+    )
+    persisted = _wire_callback(
+        monkeypatch, tid=UNKNOWN_TENANT, email="stranger@otherco.com"
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert "tenant" in response.json()["detail"].lower()
+    assert persisted == []
+    assert main.EMAIL_COOKIE not in response.cookies
+
+
+def test_callback_rejects_external_tenant_when_only_home_configured(monkeypatch):
+    """Default-deny posture: no env list ⇒ only MICROSOFT_ENTRA_TENANT_ID."""
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.delenv("ALLOWED_MICROSOFT_TENANT_IDS", raising=False)
+    persisted = _wire_callback(
+        monkeypatch, tid=DHW_TENANT, email="daniel.young@digitalhealthworks.com"
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert persisted == []
+
+
+def test_callback_rejects_email_not_in_allow_list(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
+    )
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS", "daniel@danielyoung.io"
+    )
+    persisted = _wire_callback(
+        monkeypatch, tid=DHW_TENANT, email="someone-else@digitalhealthworks.com"
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert "account" in response.json()["detail"].lower()
+    assert persisted == []
+
+
+def test_callback_rejects_when_no_tenant_allow_list_can_be_resolved(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.delenv("MICROSOFT_ENTRA_TENANT_ID", raising=False)
+    monkeypatch.delenv("ALLOWED_MICROSOFT_TENANT_IDS", raising=False)
+    persisted = _wire_callback(
+        monkeypatch, tid=DECODING_OPTIONS_TENANT, email="daniel@danielyoung.io"
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert persisted == []
+
+
+def test_callback_rejects_when_id_token_lacks_tid(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    persisted: list[dict] = []
+
+    async def fake_exchange(code, verifier):
+        # No id_token at all, so tid cannot be established.
+        return {"access_token": "token"}
+
+    async def fake_profile(access_token):
+        return {"mail": "daniel@danielyoung.io", "displayName": "Daniel Young"}
+
+    def fake_persist(profile, token_response):
+        persisted.append({"profile": profile, "token_response": token_response})
+        return {
+            "email": "daniel@danielyoung.io",
+            "display_name": "Daniel Young",
+            "provider_account_id": "x",
+            "has_refresh_token": True,
+        }
+
+    monkeypatch.setattr(main, "_exchange_code", fake_exchange)
+    monkeypatch.setattr(main, "_graph_profile", fake_profile)
+    monkeypatch.setattr(main, "_persist_microsoft_account", fake_persist)
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/auth/microsoft/callback?code=c&state=s",
+        cookies={main.AUTH_COOKIE: "s", main.PKCE_COOKIE: "v"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403
+    assert "tid" in response.json()["detail"].lower()
+    assert persisted == []
+
+
+def test_authorize_url_uses_organizations_when_multi_tenant(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get("/auth/microsoft/start", follow_redirects=False)
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    assert parsed.path.startswith("/organizations/")
+
+
+def test_authorize_url_pins_home_tenant_when_only_home_allowed(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.delenv("ALLOWED_MICROSOFT_TENANT_IDS", raising=False)
+    test_client = TestClient(main.app)
+
+    response = test_client.get("/auth/microsoft/start", follow_redirects=False)
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    assert parsed.path.startswith(f"/{DECODING_OPTIONS_TENANT}/")
+
+
+def test_config_check_reports_allow_list_presence_without_values(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
+    )
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS",
+        "daniel@danielyoung.io,daniel.young@digitalhealthworks.com",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get("/config-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    allow_list = payload["auth_allow_list"]
+    assert allow_list["tenant_allow_list_configured"] is True
+    assert allow_list["tenant_allow_list_count"] == 2
+    assert allow_list["email_allow_list_configured"] is True
+    assert allow_list["email_allow_list_count"] == 2
+    assert allow_list["multi_tenant_authorize"] is True
+
+    body = response.text
+    for value in (
+        DHW_TENANT,
+        "daniel@danielyoung.io",
+        "daniel.young@digitalhealthworks.com",
+    ):
+        assert value not in body, f"allow-list value leaked: {value!r}"
+
+    variables = payload["variables"]
+    assert variables["ALLOWED_MICROSOFT_TENANT_IDS"]["present"] is True
+    assert variables["ALLOWED_MICROSOFT_TENANT_IDS"]["is_secret"] is False
+    assert variables["ALLOWED_ACCOUNT_EMAILS"]["present"] is True
+    assert variables["ALLOWED_ACCOUNT_EMAILS"]["is_secret"] is False
+
+
+def test_config_check_all_required_present_ignores_optional_allow_list(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_SECRET", "secret")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv("KEY_VAULT_REFS_ENABLED", "false")
+    monkeypatch.delenv("ALLOWED_MICROSOFT_TENANT_IDS", raising=False)
+    monkeypatch.delenv("ALLOWED_ACCOUNT_EMAILS", raising=False)
+    test_client = TestClient(main.app)
+
+    response = test_client.get("/config-check")
+
+    payload = response.json()
+    assert payload["all_required_present"] is True
+    assert payload["auth_allow_list"]["tenant_allow_list_configured"] is False
+    assert payload["auth_allow_list"]["tenant_allow_list_count"] == 1  # home tenant fallback
+    assert payload["auth_allow_list"]["email_allow_list_configured"] is False
 
 
 def test_microsoft_callback_redirects_with_error(monkeypatch):

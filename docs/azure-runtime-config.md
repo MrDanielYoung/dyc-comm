@@ -61,6 +61,8 @@ These mirror `apps/api/.env.example` and `infra/azure/api-runtime-settings.env.e
 | `API_BASE_URL` | Public origin of the API; reported by `/config-check`. |
 | `ALLOWED_ORIGINS` | Optional comma-separated CORS allowlist. Defaults to `WEB_APP_URL`. |
 | `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Container App Key Vault refs; `false` when the workflow copies values from Key Vault into plain Container App env vars. |
+| `ALLOWED_MICROSOFT_TENANT_IDS` | Comma-separated tenant id allow-list enforced by the OAuth callback. When unset, falls back to `MICROSOFT_ENTRA_TENANT_ID` only — set explicitly to admit external tenants (e.g. DHW). Non-secret. |
+| `ALLOWED_ACCOUNT_EMAILS` | Optional comma-separated email allow-list enforced by the OAuth callback. When set, only these addresses can complete sign-in even if their tenant is allow-listed. Non-secret. |
 
 The Entra values are seeded now so the API container can boot with the same
 configuration shape across environments and so `/config-check` can report

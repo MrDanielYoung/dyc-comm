@@ -90,9 +90,85 @@ Reference: <https://learn.microsoft.com/entra/identity-platform/howto-convert-ap
 
 For the current MVP topology — one DHW operator, one app — **Option A
 (guest invitation)** is the lighter-weight path and does not require
-changes to the Entra app registration or the API's token validation. Move
-to Option B only if multiple DHW users will need the console or if guest
-invitations are blocked by tenant policy.
+changes to the Entra app registration or the API's token validation.
+
+**Option B (multi-tenant) — Fyxer-style cross-tenant connect.** This is
+the right shape if you want the experience external SaaS apps like
+Fyxer offer: each user signs in with their own home-tenant Microsoft
+account, without the Decoding Options tenant having to invite them as
+a guest. The trade-off is that the app registration must be marked
+**Accounts in any organizational directory (Any Microsoft Entra ID
+tenant — Multitenant)** in *Authentication* → *Supported account types*.
+Choose the **organizational directory only** variant (not "+ personal
+Microsoft accounts") unless you specifically want consumer Microsoft
+accounts to sign in. After flipping the setting, an admin in each
+external tenant must perform the one-time admin-consent step (see
+Option B steps above).
+
+When the app is multi-tenant, the runtime **must** enforce a strict
+app-side allow-list of which tenants and accounts are permitted to
+finish the OAuth callback. This repo enforces that allow-list itself
+(see "App-side tenant and account allow-list" below); it is not a
+property of the Entra app registration.
+
+Move from Option A to Option B only if multiple users from external
+tenants need the console or if guest invitations are blocked by tenant
+policy.
+
+## App-side tenant and account allow-list
+
+Even with a multi-tenant Entra app, the API refuses to persist a
+connected account unless the caller's tenant id and email survive a
+server-side allow-list check. This is the same pattern Fyxer-style
+apps use to make multi-tenant safe: Microsoft authenticates the user,
+the app authorizes the principal.
+
+### Identity attributes used
+
+After the OAuth code-for-token exchange succeeds against Microsoft's
+token endpoint, the callback handler reads:
+
+- `tid` from the ID token payload — the tenant id of the principal that
+  just signed in. The ID token is decoded without verifying the
+  signature; we treat it as an authorization attribute of the same
+  principal whose authorization code we just redeemed over a
+  confidential-client TLS exchange (client secret + PKCE), not as
+  standalone proof of identity. A missing `tid` is a hard failure.
+- `mail` / `userPrincipalName` from Microsoft Graph `/me`, falling back
+  to ID token `preferred_username` / `upn` / `email` when Graph does not
+  return a usable address.
+
+### Enforcement (`apps/api/app/main.py`)
+
+The callback raises HTTP 403 — and persists no token — when:
+
+- `tid` cannot be established from the token response.
+- `tid` is not in `ALLOWED_MICROSOFT_TENANT_IDS` (or, when that env var
+  is unset, not equal to `MICROSOFT_ENTRA_TENANT_ID`).
+- `ALLOWED_ACCOUNT_EMAILS` is set and the resolved email is not in it.
+
+Each deny path emits a structured log line via the `dyc_comm.auth`
+logger (`auth.callback.denied reason=...`) so reviews can see who was
+turned away without leaking secret material.
+
+### Configuration
+
+Both env vars are non-secret and committed in
+`.github/workflows/configure-api-runtime.yml` so the production identity
+policy is reviewable. Adding or removing a tenant or account is a
+workflow PR, not a portal click.
+
+| Variable | Behaviour when unset | Example |
+| --- | --- | --- |
+| `ALLOWED_MICROSOFT_TENANT_IDS` | Falls back to `MICROSOFT_ENTRA_TENANT_ID` only. **External tenants are denied by default.** | `99c0f350-71bd-47f9-ab6a-cf10bc76533a,3dd54b52-c31e-442e-8705-a56b839e59a7` |
+| `ALLOWED_ACCOUNT_EMAILS` | No per-email allow-list — any user from an allow-listed tenant may sign in. | `daniel@danielyoung.io,daniel.young@digitalhealthworks.com` |
+
+`/config-check` reports the presence and counts of both lists under
+`auth_allow_list` (it never returns the values themselves).
+
+When the operator allow-lists more than one tenant, the runtime also
+swaps the `/authorize` and `/token` URLs from the home tenant id over
+to `/organizations`, which is required for external-tenant sign-in.
 
 ### What does *not* fix this
 
