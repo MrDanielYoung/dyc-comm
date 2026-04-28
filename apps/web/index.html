@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
     <title>DYC Comm</title>
     <link rel="stylesheet" href="https://use.typekit.net/dhs7zbs.css">
     <style>
@@ -20,6 +21,7 @@
         --accent-light: #acc7e4;
         --success: #1d7f46;
         --warning: #8f5a12;
+        --danger: #b53a2c;
         --shadow: 0 10px 24px rgba(20, 22, 27, 0.05);
         --radius-xl: 18px;
         --radius-lg: 12px;
@@ -230,6 +232,12 @@
         font-size: 0.82rem;
       }
 
+      .notice.error {
+        color: var(--danger);
+        border-color: rgba(181, 58, 44, 0.3);
+        background: rgba(181, 58, 44, 0.06);
+      }
+
       .info-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -286,6 +294,16 @@
       .status-chip.connected {
         color: var(--success);
         background: rgba(29, 127, 70, 0.12);
+      }
+
+      .status-chip.locked {
+        color: var(--warning);
+        background: rgba(143, 90, 18, 0.12);
+      }
+
+      .status-chip.error {
+        color: var(--danger);
+        background: rgba(181, 58, 44, 0.12);
       }
 
       .status-title {
@@ -370,14 +388,8 @@
         color: var(--warning);
       }
 
-      .ops-grid {
-        display: none;
-      }
-
-      .ops-card {
-        display: none;
-      }
-
+      .ops-grid,
+      .ops-card,
       .ops-value {
         display: none;
       }
@@ -543,6 +555,46 @@
         font-weight: 500;
       }
 
+      .gate {
+        display: grid;
+        gap: 18px;
+        padding: 36px 28px;
+        text-align: center;
+        align-items: center;
+        justify-items: center;
+      }
+
+      .gate-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: rgba(74, 131, 197, 0.12);
+        color: var(--accent-deep);
+        font-size: 1.6rem;
+      }
+
+      .gate h1 {
+        max-width: 22ch;
+      }
+
+      .gate-copy {
+        margin: 0;
+        max-width: 48ch;
+        color: var(--muted);
+        font-size: 0.95rem;
+        line-height: 1.5;
+      }
+
+      .gate .action-row {
+        justify-content: center;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
       @media (max-width: 980px) {
         .layout,
         .section-grid,
@@ -565,7 +617,8 @@
 
         .connect-panel,
         .status-panel,
-        .section-panel {
+        .section-panel,
+        .gate {
           padding: 18px;
         }
       }
@@ -579,128 +632,146 @@
             <img class="brand-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
             <img class="brand-wordmark" src="/assets/dy-wordmark.png?v=20260426b" alt="Daniel Young">
           </div>
-          <p class="topbar-note">Mailbox setup console</p>
+          <p class="topbar-note" id="topbarNote">Mailbox setup console</p>
         </header>
 
-        <section class="layout">
-          <section class="panel connect-panel">
-            <div class="brand-strip">
-              <img class="brand-strip-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
-              <div class="brand-strip-text">
-                <p class="brand-strip-label">Daniel Young</p>
-                <p class="brand-strip-value">Mailbox setup</p>
-              </div>
-            </div>
-            <div class="eyebrow">Microsoft 365</div>
-            <h1>Connect the mailbox</h1>
-            <div class="action-row">
-              <a class="button-link primary" id="connectLink" href="#">Connect Microsoft 365</a>
-              <button class="secondary" id="refreshButton" type="button">Refresh</button>
-              <button class="secondary" id="signOutButton" type="button">Clear session</button>
-            </div>
-            <p class="notice" id="authNotice">
-              Sign-in status and runtime errors appear here.
-            </p>
-            <div class="info-grid">
-              <div class="info-item">
-                <p class="label">Linked account</p>
-                <p class="value" id="linkedEmail">Not connected yet</p>
-              </div>
-              <div class="info-item">
-                <p class="label">Mailbox access</p>
-                <p class="value" id="mailboxAccess">Waiting for sign-in</p>
-              </div>
-              <div class="info-item">
-                <p class="label">API base</p>
-                <p class="value"><code id="apiBaseText"></code></p>
-              </div>
-            </div>
-          </section>
-
-          <aside class="panel status-panel">
-            <span class="status-chip idle" id="statusChip">Checking connection state</span>
-            <h2 class="status-title">Current session</h2>
-            <p class="status-copy">
-              Browser session state and backend readiness.
-            </p>
-            <div class="meta-grid">
-              <div class="meta-card">
-                <p class="label">Display name</p>
-                <p class="value" id="linkedName">—</p>
-              </div>
-              <div class="meta-card">
-                <p class="label">Session state</p>
-                <p class="value" id="sessionState">Checking</p>
-              </div>
-            </div>
-          </aside>
+        <section class="panel gate" id="gateView" aria-live="polite">
+          <div class="gate-icon" aria-hidden="true">&#x1F512;</div>
+          <span class="status-chip locked" id="gateChip">Sign-in required</span>
+          <h1 id="gateTitle">Sign in to continue</h1>
+          <p class="gate-copy" id="gateCopy">
+            This console is private. Sign in with the authorized Microsoft 365 account
+            to view mailbox status and run mailbox operations.
+          </p>
+          <div class="action-row">
+            <a class="button-link primary" id="gateConnectLink" href="#">Sign in with Microsoft</a>
+            <button class="secondary" id="gateRetryButton" type="button">Retry session check</button>
+          </div>
+          <p class="notice" id="gateNotice" hidden></p>
         </section>
 
-        <section class="section-grid">
-          <section class="panel section-panel">
-            <h2 class="section-title">Mailbox</h2>
-            <div class="folder-board">
-              <div class="readiness-list">
-                <div class="readiness-item">
-                  <span class="readiness-label">API reachability</span>
-                  <span class="readiness-value" id="apiReachability">Checking</span>
-                </div>
-                <div class="readiness-item">
-                  <span class="readiness-label">OAuth configuration</span>
-                  <span class="readiness-value" id="oauthReadiness">Checking</span>
-                </div>
-                <div class="readiness-item">
-                  <span class="readiness-label">Database connection</span>
-                  <span class="readiness-value" id="dbReadiness">Checking</span>
-                </div>
-              </div>
-              <div class="folder-groups">
-                <div class="folder-group">
-                  <h3>DYC folders</h3>
-                  <div class="folder-list" id="dycFolderList">
-                    <p class="empty-state">Connect the mailbox to load DYC-managed folders.</p>
+        <div id="appView" hidden>
+          <div class="shell">
+            <section class="layout">
+              <section class="panel connect-panel">
+                <div class="brand-strip">
+                  <img class="brand-strip-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
+                  <div class="brand-strip-text">
+                    <p class="brand-strip-label">Daniel Young</p>
+                    <p class="brand-strip-value">Mailbox setup</p>
                   </div>
                 </div>
-                <div class="folder-group">
-                  <h3>Legacy / other folders</h3>
-                  <div class="folder-list" id="otherFolderList">
-                    <p class="empty-state">No folder inventory loaded yet.</p>
+                <div class="eyebrow">Microsoft 365</div>
+                <h1>Mailbox console</h1>
+                <div class="action-row">
+                  <button class="secondary" id="refreshButton" type="button">Refresh</button>
+                  <button class="secondary" id="signOutButton" type="button">Sign out</button>
+                </div>
+                <p class="notice" id="authNotice">
+                  Sign-in status and runtime errors appear here.
+                </p>
+                <div class="info-grid">
+                  <div class="info-item">
+                    <p class="label">Linked account</p>
+                    <p class="value" id="linkedEmail">—</p>
+                  </div>
+                  <div class="info-item">
+                    <p class="label">Mailbox access</p>
+                    <p class="value" id="mailboxAccess">—</p>
+                  </div>
+                  <div class="info-item">
+                    <p class="label">API base</p>
+                    <p class="value"><code id="apiBaseText"></code></p>
                   </div>
                 </div>
-              </div>
-            </div>
-          </section>
+              </section>
 
-          <section class="panel section-panel">
-            <h2 class="section-title">Actions</h2>
-            <div class="endpoint-actions">
-              <button class="endpoint-button" id="sessionButton" type="button">
-                <strong>Session</strong>
-                <span>Fetch `/auth/session`</span>
-              </button>
-              <button class="endpoint-button" id="foldersButton" type="button" disabled>
-                <strong>Folders</strong>
-                <span>Fetch `/mail/folders`</span>
-              </button>
-              <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
-                <strong>Inventory Sync</strong>
-                <span>POST `/mail/folders/inventory/sync`</span>
-              </button>
-              <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
-                <strong>Bootstrap</strong>
-                <span>POST `/mail/folders/bootstrap`</span>
-              </button>
-            </div>
-            <div class="diagnostic-list" id="missingConfigList">
-              <div class="diagnostic-row">
-                <span class="diagnostic-name">Loading</span>
-                <span class="diagnostic-state missing">Checking</span>
-              </div>
-            </div>
-            <h2 class="section-title">Last response</h2>
-            <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
-          </section>
-        </section>
+              <aside class="panel status-panel">
+                <span class="status-chip idle" id="statusChip">Checking connection state</span>
+                <h2 class="status-title">Current session</h2>
+                <p class="status-copy">
+                  Browser session state and backend readiness.
+                </p>
+                <div class="meta-grid">
+                  <div class="meta-card">
+                    <p class="label">Display name</p>
+                    <p class="value" id="linkedName">—</p>
+                  </div>
+                  <div class="meta-card">
+                    <p class="label">Session state</p>
+                    <p class="value" id="sessionState">Checking</p>
+                  </div>
+                </div>
+              </aside>
+            </section>
+
+            <section class="section-grid">
+              <section class="panel section-panel">
+                <h2 class="section-title">Mailbox</h2>
+                <div class="folder-board">
+                  <div class="readiness-list">
+                    <div class="readiness-item">
+                      <span class="readiness-label">API reachability</span>
+                      <span class="readiness-value" id="apiReachability">Checking</span>
+                    </div>
+                    <div class="readiness-item">
+                      <span class="readiness-label">OAuth configuration</span>
+                      <span class="readiness-value" id="oauthReadiness">Checking</span>
+                    </div>
+                    <div class="readiness-item">
+                      <span class="readiness-label">Database connection</span>
+                      <span class="readiness-value" id="dbReadiness">Checking</span>
+                    </div>
+                  </div>
+                  <div class="folder-groups">
+                    <div class="folder-group">
+                      <h3>DYC folders</h3>
+                      <div class="folder-list" id="dycFolderList">
+                        <p class="empty-state">No DYC-managed folders loaded yet.</p>
+                      </div>
+                    </div>
+                    <div class="folder-group">
+                      <h3>Legacy / other folders</h3>
+                      <div class="folder-list" id="otherFolderList">
+                        <p class="empty-state">No folder inventory loaded yet.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="panel section-panel">
+                <h2 class="section-title">Actions</h2>
+                <div class="endpoint-actions">
+                  <button class="endpoint-button" id="sessionButton" type="button" disabled>
+                    <strong>Session</strong>
+                    <span>Fetch `/auth/session`</span>
+                  </button>
+                  <button class="endpoint-button" id="foldersButton" type="button" disabled>
+                    <strong>Folders</strong>
+                    <span>Fetch `/mail/folders`</span>
+                  </button>
+                  <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
+                    <strong>Inventory Sync</strong>
+                    <span>POST `/mail/folders/inventory/sync`</span>
+                  </button>
+                  <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
+                    <strong>Bootstrap</strong>
+                    <span>POST `/mail/folders/bootstrap`</span>
+                  </button>
+                </div>
+                <div class="diagnostic-list" id="missingConfigList">
+                  <div class="diagnostic-row">
+                    <span class="diagnostic-name">Loading</span>
+                    <span class="diagnostic-state missing">Checking</span>
+                  </div>
+                </div>
+                <h2 class="section-title">Last response</h2>
+                <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
+              </section>
+            </section>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -723,7 +794,17 @@
       }
 
       const API_BASE = inferApiBase();
-      const connectLink = document.getElementById("connectLink");
+      const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+
+      const gateView = document.getElementById("gateView");
+      const gateChip = document.getElementById("gateChip");
+      const gateTitle = document.getElementById("gateTitle");
+      const gateCopy = document.getElementById("gateCopy");
+      const gateNotice = document.getElementById("gateNotice");
+      const gateConnectLink = document.getElementById("gateConnectLink");
+      const gateRetryButton = document.getElementById("gateRetryButton");
+
+      const appView = document.getElementById("appView");
       const refreshButton = document.getElementById("refreshButton");
       const signOutButton = document.getElementById("signOutButton");
       const authNotice = document.getElementById("authNotice");
@@ -746,16 +827,53 @@
       const otherFolderList = document.getElementById("otherFolderList");
 
       apiBaseText.textContent = API_BASE;
-      connectLink.href = `${API_BASE}/auth/microsoft/start`;
+      gateConnectLink.href = SIGN_IN_URL;
+
+      function showGate({ chip, chipClass, title, copy, notice, noticeIsError }) {
+        appView.hidden = true;
+        gateView.hidden = false;
+        if (chip) {
+          gateChip.textContent = chip;
+          gateChip.className = `status-chip ${chipClass || "locked"}`;
+        }
+        if (title) gateTitle.textContent = title;
+        if (copy) gateCopy.textContent = copy;
+        if (notice) {
+          gateNotice.textContent = notice;
+          gateNotice.hidden = false;
+          gateNotice.className = `notice ${noticeIsError ? "error" : ""}`.trim();
+        } else {
+          gateNotice.hidden = true;
+          gateNotice.textContent = "";
+        }
+        disableMailboxActions();
+        clearMailboxView();
+      }
+
+      function showApp() {
+        gateView.hidden = true;
+        appView.hidden = false;
+      }
+
+      function disableMailboxActions() {
+        sessionButton.disabled = true;
+        foldersButton.disabled = true;
+        inventorySyncButton.disabled = true;
+        bootstrapButton.disabled = true;
+      }
+
+      function clearMailboxView() {
+        renderFolders([]);
+      }
 
       function setStatus(isConnected, email, name, isMailboxReady) {
         statusChip.className = `status-chip ${isConnected ? "connected" : "idle"}`;
         statusChip.textContent = isConnected ? "Microsoft account linked" : "Awaiting Microsoft account";
-        linkedEmail.textContent = email || "Not connected yet";
+        linkedEmail.textContent = email || "—";
         linkedName.textContent = name || "—";
         mailboxAccess.textContent = isConnected
           ? (isMailboxReady ? "Ready for mailbox calls" : "Linked, awaiting runtime")
-          : "Waiting for sign-in";
+          : "—";
         sessionState.textContent = isConnected ? "Connected" : "Not connected";
       }
 
@@ -799,10 +917,9 @@
         `).join("");
       }
 
-      function updateActionAvailability(payload) {
-        const sessionReady = true;
+      function enableMailboxActions(payload) {
         const mailboxReady = Boolean(payload.linked_account) && Boolean(payload.mailbox_access_ready);
-        sessionButton.disabled = !sessionReady;
+        sessionButton.disabled = false;
         foldersButton.disabled = !mailboxReady;
         inventorySyncButton.disabled = !mailboxReady;
         bootstrapButton.disabled = !mailboxReady;
@@ -838,14 +955,6 @@
         );
       }
 
-      async function loadMailboxView() {
-        const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
-          method: "POST"
-        });
-        renderFolders(payload.folders || []);
-        return payload;
-      }
-
       async function callApi(label, path, options = {}) {
         const response = await fetch(`${API_BASE}${path}`, {
           credentials: "include",
@@ -860,112 +969,176 @@
         }
         setRawOutput(`${label} (${response.status})`, payload);
         if (!response.ok) {
-          throw new Error(`${label} failed with ${response.status}`);
+          const error = new Error(`${label} failed with ${response.status}`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
         }
         return payload;
       }
 
-      async function loadSession() {
-        authNotice.textContent = "Checking API session state…";
+      async function fetchSession() {
+        const response = await fetch(`${API_BASE}/auth/session`, {
+          credentials: "include"
+        });
+        if (!response.ok) {
+          const error = new Error(`Session check failed with ${response.status}`);
+          error.status = response.status;
+          throw error;
+        }
+        return response.json();
+      }
+
+      async function loadMailboxView() {
+        const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
+          method: "POST"
+        });
+        renderFolders(payload.folders || []);
+        return payload;
+      }
+
+      async function evaluateSession({ initial }) {
+        if (initial) {
+          showGate({
+            chip: "Checking session",
+            chipClass: "idle",
+            title: "Checking your session…",
+            copy: "Verifying your Microsoft 365 sign-in with the API."
+          });
+        }
+
+        let payload;
         try {
-          const payload = await callApi("Session", "/auth/session");
-          const account = payload.linked_account;
-          setStatus(
-            Boolean(account),
-            account?.email,
-            account?.display_name,
-            Boolean(payload.mailbox_access_ready)
-          );
-          setReadiness(apiReachability, true);
-          setReadiness(
-            oauthReadiness,
-            payload.has_entra_client_id &&
-              payload.has_entra_tenant_id &&
-              payload.has_entra_client_secret &&
-              payload.has_entra_redirect_uri
-          );
-          setReadiness(dbReadiness, payload.has_database_url);
-          renderMissingConfig(payload);
-          updateActionAvailability(payload);
-          if (!account) {
-            renderFolders([]);
-          } else if (payload.mailbox_access_ready) {
-            authNotice.textContent = "Mailbox connected. Loading folder inventory…";
-            try {
-              await loadMailboxView();
-            } catch (error) {
-              authNotice.textContent = `Mailbox connected, but folder inventory could not be loaded yet: ${error.message}`;
-            }
-          }
-          authNotice.textContent = account
-            ? "Session available."
-            : "No linked session.";
+          payload = await fetchSession();
         } catch (error) {
-          setStatus(false, null, null, false);
-          setReadiness(apiReachability, false, "Reachable", "Unavailable");
-          setReadiness(oauthReadiness, false);
-          setReadiness(dbReadiness, false);
-          missingConfigList.innerHTML = `
-            <div class="diagnostic-row">
-              <span class="diagnostic-name">API request failed</span>
-              <span class="diagnostic-state missing">Error</span>
-            </div>
-          `;
-          updateActionAvailability({});
-          renderFolders([]);
-          authNotice.textContent = `Unable to reach the API right now: ${error.message}`;
+          showGate({
+            chip: "API unreachable",
+            chipClass: "error",
+            title: "Cannot reach the API",
+            copy: "The console could not contact the backend to verify your session.",
+            notice: `API request failed: ${error.message}`,
+            noticeIsError: true
+          });
+          return;
+        }
+
+        const account = payload.linked_account;
+        if (!account) {
+          showGate({
+            chip: "Sign-in required",
+            chipClass: "locked",
+            title: "Sign in to continue",
+            copy: "This console is private. Sign in with the authorized Microsoft 365 account to view mailbox status and run mailbox operations."
+          });
+          return;
+        }
+
+        if (!payload.mailbox_access_ready) {
+          showGate({
+            chip: "Re-authentication required",
+            chipClass: "locked",
+            title: "Mailbox access not ready",
+            copy: "Your Microsoft account is linked, but the mailbox token is missing or expired. Sign in again to refresh access.",
+            notice: `Linked account: ${account.email}`
+          });
+          return;
+        }
+
+        showApp();
+        setStatus(true, account.email, account.display_name, true);
+        setReadiness(apiReachability, true);
+        setReadiness(
+          oauthReadiness,
+          payload.has_entra_client_id &&
+            payload.has_entra_tenant_id &&
+            payload.has_entra_client_secret &&
+            payload.has_entra_redirect_uri
+        );
+        setReadiness(dbReadiness, payload.has_database_url);
+        renderMissingConfig(payload);
+        enableMailboxActions(payload);
+
+        authNotice.textContent = "Mailbox connected. Loading folder inventory…";
+        try {
+          await loadMailboxView();
+          authNotice.textContent = "Session available.";
+        } catch (error) {
+          if (error.status === 401) {
+            await evaluateSession({ initial: false });
+            return;
+          }
+          authNotice.textContent = `Mailbox connected, but folder inventory could not be loaded: ${error.message}`;
         }
       }
 
       async function signOut() {
-        authNotice.textContent = "Clearing the local account session…";
-        await fetch(`${API_BASE}/auth/logout`, {
-          method: "POST",
-          credentials: "include"
+        try {
+          await fetch(`${API_BASE}/auth/logout`, {
+            method: "POST",
+            credentials: "include"
+          });
+        } catch (_error) {
+          // best-effort sign-out; UI will still re-gate
+        }
+        showGate({
+          chip: "Signed out",
+          chipClass: "locked",
+          title: "You have been signed out",
+          copy: "Sign in again with the authorized Microsoft 365 account to continue."
         });
-        await loadSession();
+      }
+
+      async function safeCallApi(label, path, options) {
+        try {
+          return await callApi(label, path, options);
+        } catch (error) {
+          if (error.status === 401) {
+            await evaluateSession({ initial: false });
+          }
+          return null;
+        }
       }
 
       const url = new URL(window.location.href);
       if (url.searchParams.get("auth") === "success") {
-        authNotice.textContent = "Microsoft sign-in returned successfully. Refreshing session state…";
         url.search = "";
         window.history.replaceState({}, "", url);
-      }
-
-      if (url.searchParams.get("auth") === "error") {
+      } else if (url.searchParams.get("auth") === "error") {
         const reason = url.searchParams.get("reason") || "Unknown authorization error.";
-        authNotice.textContent = `Microsoft sign-in returned an error: ${reason}`;
         url.search = "";
         window.history.replaceState({}, "", url);
+        showGate({
+          chip: "Sign-in failed",
+          chipClass: "error",
+          title: "Microsoft sign-in failed",
+          copy: "The Microsoft authorization did not complete. Try again.",
+          notice: reason,
+          noticeIsError: true
+        });
       }
 
-      refreshButton.addEventListener("click", loadSession);
+      gateRetryButton.addEventListener("click", () => evaluateSession({ initial: true }));
+      refreshButton.addEventListener("click", () => evaluateSession({ initial: false }));
       signOutButton.addEventListener("click", signOut);
-      sessionButton.addEventListener("click", () => callApi("Session", "/auth/session").catch(() => {}));
+      sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
       foldersButton.addEventListener("click", async () => {
-        try {
-          const payload = await callApi("Folders", "/mail/folders");
-          renderFolders(payload.folders || []);
-        } catch {}
+        const payload = await safeCallApi("Folders", "/mail/folders");
+        if (payload) renderFolders(payload.folders || []);
       });
       inventorySyncButton.addEventListener("click", async () => {
-        try {
-          const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
-            method: "POST"
-          });
-          renderFolders(payload.folders || []);
-        } catch {}
+        const payload = await safeCallApi("Inventory sync", "/mail/folders/inventory/sync", {
+          method: "POST"
+        });
+        if (payload) renderFolders(payload.folders || []);
       });
       bootstrapButton.addEventListener("click", async () => {
-        try {
-          const payload = await callApi("Bootstrap", "/mail/folders/bootstrap", {
-            method: "POST"
-          });
-          renderFolders(payload.ensured_folders || []);
-        } catch {}
+        const payload = await safeCallApi("Bootstrap", "/mail/folders/bootstrap", {
+          method: "POST"
+        });
+        if (payload) renderFolders(payload.ensured_folders || []);
       });
-      loadSession();
+
+      evaluateSession({ initial: true });
     </script>
   </body>
 </html>

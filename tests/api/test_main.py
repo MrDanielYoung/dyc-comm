@@ -635,6 +635,40 @@ def test_mail_folder_inventory_requires_session(monkeypatch):
     assert response.status_code == 401
 
 
+def test_sync_mail_folder_inventory_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.post("/mail/folders/inventory/sync")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_auth_session_without_cookie_returns_no_linked_account(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.get("/auth/session")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["linked_account"] is None
+    assert payload["mailbox_access_ready"] is False
+
+
+def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+
+    protected = (
+        ("GET", "/mail/folders"),
+        ("GET", "/mail/folders/inventory"),
+        ("POST", "/mail/folders/bootstrap"),
+        ("POST", "/mail/folders/inventory/sync"),
+    )
+    for method, path in protected:
+        response = test_client.request(method, path)
+        assert response.status_code == 401, f"{method} {path} should require a session"
+        assert response.json()["detail"] == "No linked account session found."
+
+
 def test_cli_build_parser_dispatches_subcommands():
     from apps.api.app import cli
 
