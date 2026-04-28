@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   api-checks:
     runs-on: ubuntu-latest
@@ -31,8 +35,24 @@ jobs:
         run: ruff check apps tests
 
       - name: Format check (ruff format)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          ruff format --diff apps tests || true
+          set +e
+          ruff format --diff apps tests > /tmp/ruff_format_diff.txt 2>&1
+          STATUS=$?
+          if [ "$STATUS" -ne 0 ] && [ -n "$PR_NUMBER" ]; then
+            {
+              echo "Ruff format diff (auto-posted by CI):"
+              echo
+              echo '```diff'
+              head -c 50000 /tmp/ruff_format_diff.txt
+              echo
+              echo '```'
+            } > /tmp/ruff_comment.md
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/ruff_comment.md || true
+          fi
           ruff format --check apps tests
 
       - name: Run tests
