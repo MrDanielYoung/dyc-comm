@@ -49,11 +49,26 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Fetch Key Vault secrets and apply API runtime settings
+        # azure/cli@v2 runs the inlineScript inside a Docker container and
+        # does not forward arbitrary workflow `env:` vars into it. Values
+        # the script needs (resource group, app name, vault name, well-known
+        # URLs, tenant id seed) are interpolated via `${{ env.X }}` at the
+        # GitHub Actions level. Secret values fetched from Key Vault remain
+        # in shell variables inside the container.
         uses: azure/cli@v2
         with:
           azcliversion: latest
           inlineScript: |
             set -euo pipefail
+
+            KEY_VAULT_NAME="${{ env.KEY_VAULT_NAME }}"
+            CONTAINER_APP_NAME="${{ env.CONTAINER_APP_NAME }}"
+            RESOURCE_GROUP="${{ env.RESOURCE_GROUP }}"
+            MICROSOFT_ENTRA_REDIRECT_URI="${{ env.MICROSOFT_ENTRA_REDIRECT_URI }}"
+            WEB_APP_URL="${{ env.WEB_APP_URL }}"
+            API_BASE_URL="${{ env.API_BASE_URL }}"
+            ALLOWED_ORIGINS="${{ env.ALLOWED_ORIGINS }}"
+            ALLOWED_MICROSOFT_TENANT_IDS_SEED="${{ env.ALLOWED_MICROSOFT_TENANT_IDS_SEED }}"
 
             echo "Target Container App: ${CONTAINER_APP_NAME} in ${RESOURCE_GROUP}"
             echo "Key Vault: ${KEY_VAULT_NAME}"

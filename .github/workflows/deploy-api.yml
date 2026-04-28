@@ -65,14 +65,19 @@ jobs:
         # Azure CLI session, so no REGISTRY_USERNAME / REGISTRY_PASSWORD
         # secrets are required. The federated identity must hold AcrPush
         # on the registry.
+        #
+        # azure/cli@v2 runs the inlineScript inside a Docker container and
+        # does not forward arbitrary workflow `env:` vars into that
+        # container, so values are interpolated via `${{ env.X }}` at the
+        # GitHub Actions level rather than referenced as shell variables.
         uses: azure/cli@v2
         with:
           azcliversion: latest
           inlineScript: |
             set -euo pipefail
             az acr build \
-              --registry "$REGISTRY_NAME" \
-              --image "$IMAGE_REPOSITORY:$IMAGE_TAG" \
+              --registry "${{ env.REGISTRY_NAME }}" \
+              --image "${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}" \
               --file apps/api/Dockerfile \
               apps/api \
               --output none
@@ -88,11 +93,11 @@ jobs:
           azcliversion: latest
           inlineScript: |
             set -euo pipefail
-            FULL_IMAGE="${REGISTRY_URL}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+            FULL_IMAGE="${{ env.REGISTRY_URL }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}"
             echo "Deploying image: ${FULL_IMAGE}"
             az containerapp update \
-              --name "$CONTAINER_APP_NAME" \
-              --resource-group "$RESOURCE_GROUP" \
-              --image "$FULL_IMAGE" \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "${FULL_IMAGE}" \
               --output none
             echo "Container App image updated; runtime env vars left untouched."
