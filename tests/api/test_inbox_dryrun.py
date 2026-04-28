@@ -473,8 +473,7 @@ def test_accounts_endpoint_reports_mailbox_access_ready_per_account(monkeypatch)
     assert response.status_code == 200
     payload = response.json()
     accounts_by_email = {entry["email"]: entry for entry in payload["accounts"]}
-    assert accounts_by_email["daniel@danielyoung.io"]["mailbox_access_ready"] is True
-    assert (
-        accounts_by_email["daniel.young@digitalhealthworks.com"]["mailbox_access_ready"]
-        is False
-    )
+    primary_entry = accounts_by_email["daniel@danielyoung.io"]
+    secondary_entry = accounts_by_email["daniel.young@digitalhealthworks.com"]
+    assert primary_entry["mailbox_access_ready"] is True
+    assert secondary_entry["mailbox_access_ready"] is False
