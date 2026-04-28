@@ -15,7 +15,7 @@ from fastapi import Cookie, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from apps.api.app import classifier as classifier_module
+from . import classifier as classifier_module
 
 logger = logging.getLogger("dyc_comm.auth")
 
