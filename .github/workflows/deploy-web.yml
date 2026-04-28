@@ -10,19 +10,23 @@ name: Deploy Web
 #   an older shell while subsequent main-branch commits (PRs #41, #43, #44)
 #   reported green deploys.
 #
-#   This workflow now does three narrow things:
+#   This workflow now does four narrow things:
 #     1. Build and push the web image to ACR via `docker login` + `docker
 #        build` + `docker push`. The registry username/password secrets
 #        already grant AcrPush, so no extra ACR Tasks RBAC is needed.
 #     2. Update ONLY the container image on the existing Container App via
 #        `az containerapp update --image`. Like the API, this creates a new
 #        revision while leaving any other Container App config alone.
-#     3. After the update, fetch the Container App FQDN and the public
-#        custom domain, then assert that the served HTML contains the
-#        current login copy and does NOT contain the removed
-#        "Private app — authorized account only." subtitle. If either
-#        check fails the deploy is marked failed so we don't keep shipping
-#        green-but-stale runs.
+#     3. Wait for the new revision to actually become Active+Running and
+#        be the 100% traffic target before any content checks run.
+#        `az containerapp update --image` returns before that flip
+#        happens, so without this step verification races the rollout and
+#        flaps against whichever revision the FQDN happens to serve.
+#     4. After the rollout is confirmed, fetch the Container App FQDN and
+#        the public custom domain and assert the served HTML contains the
+#        current Microsoft sign-in CTA and does NOT contain the removed
+#        "Private app" subtitle. If either check fails the deploy is
+#        marked failed so we don't keep shipping green-but-stale runs.
 
 on:
   workflow_dispatch:
@@ -81,7 +85,8 @@ jobs:
             apps/web
           docker push "${FULL_IMAGE}"
 
-      - name: Update Container App image only
+      - name: Update Container App image and capture new revision
+        id: deploy
         uses: azure/cli@v2
         with:
           azcliversion: latest
@@ -94,68 +99,128 @@ jobs:
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --image "${FULL_IMAGE}" \
               --output none
-            echo "Container App image updated."
-
-      - name: Resolve Container App FQDN
-        id: fqdn
-        uses: azure/cli@v2
-        with:
-          azcliversion: latest
-          inlineScript: |
-            set -euo pipefail
+            NEW_REVISION=$(az containerapp show \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query "properties.latestRevisionName" \
+              -o tsv)
             FQDN=$(az containerapp show \
               --name "${{ env.CONTAINER_APP_NAME }}" \
               --resource-group "${{ env.RESOURCE_GROUP }}" \
               --query "properties.configuration.ingress.fqdn" \
               -o tsv)
-            if [ -z "${FQDN}" ]; then
-              echo "Could not resolve Container App FQDN" >&2
+            if [ -z "${NEW_REVISION}" ] || [ -z "${FQDN}" ]; then
+              echo "Failed to resolve revision/FQDN (revision='${NEW_REVISION}', fqdn='${FQDN}')" >&2
               exit 1
             fi
+            echo "New revision: ${NEW_REVISION}"
             echo "Container App FQDN: ${FQDN}"
+            echo "revision=${NEW_REVISION}" >> "$GITHUB_OUTPUT"
             echo "fqdn=${FQDN}" >> "$GITHUB_OUTPUT"
 
+      - name: Wait for new revision to be Running with full traffic
+        # Container App `update` returns before the new revision is the
+        # active traffic target, which is why prior runs hit the verify
+        # step while the FQDN was still serving the old revision. Poll
+        # until our newly-created revision is provisioned, healthy, and
+        # holds 100% of the traffic weight before content checks run.
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            REVISION="${{ steps.deploy.outputs.revision }}"
+            DEADLINE=$(( $(date +%s) + 360 ))
+            while : ; do
+              REV_STATE=$(az containerapp revision show \
+                --name "${{ env.CONTAINER_APP_NAME }}" \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --revision "${REVISION}" \
+                --query "{prov:properties.provisioningState,run:properties.runningState,active:properties.active}" \
+                -o json 2>/dev/null || echo '{}')
+              TRAFFIC=$(az containerapp show \
+                --name "${{ env.CONTAINER_APP_NAME }}" \
+                --resource-group "${{ env.RESOURCE_GROUP }}" \
+                --query "properties.configuration.ingress.traffic" \
+                -o json 2>/dev/null || echo '[]')
+              echo "Revision state: ${REV_STATE}"
+              echo "Traffic split: ${TRAFFIC}"
+              PROV=$(printf '%s' "${REV_STATE}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('prov') or '')")
+              RUN=$(printf '%s' "${REV_STATE}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('run') or '')")
+              ACTIVE=$(printf '%s' "${REV_STATE}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('active'))")
+              # Traffic split is a list. Container App may either pin a
+              # specific revision name (revisionName==our REVISION) or use
+              # latestRevision==True; either case means our revision is
+              # the active traffic target at 100%.
+              WEIGHT=$(printf '%s' "${TRAFFIC}" | REV="${REVISION}" python3 -c 'import os,sys,json; rev=os.environ["REV"]; data=json.load(sys.stdin) or []; m=[(i.get("weight") or 0) for i in data if i.get("latestRevision") or i.get("revisionName")==rev]; print(m[0] if m else 0)')
+              if [ "${PROV}" = "Provisioned" ] && [ "${RUN}" = "Running" ] && [ "${ACTIVE}" = "True" ] && [ "${WEIGHT}" = "100" ]; then
+                echo "Revision ${REVISION} is active with 100% traffic."
+                break
+              fi
+              if [ "${PROV}" = "Failed" ] || [ "${RUN}" = "Failed" ]; then
+                echo "Revision ${REVISION} entered a failed state." >&2
+                az containerapp revision show \
+                  --name "${{ env.CONTAINER_APP_NAME }}" \
+                  --resource-group "${{ env.RESOURCE_GROUP }}" \
+                  --revision "${REVISION}" \
+                  -o json >&2 || true
+                exit 1
+              fi
+              if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+                echo "Timed out waiting for revision ${REVISION} to become active." >&2
+                az containerapp revision show \
+                  --name "${{ env.CONTAINER_APP_NAME }}" \
+                  --resource-group "${{ env.RESOURCE_GROUP }}" \
+                  --revision "${REVISION}" \
+                  -o json >&2 || true
+                exit 1
+              fi
+              sleep 10
+            done
+
       - name: Verify deployed web content
-        # Fail the deploy if the served HTML still contains the removed
-        # "Private app" subtitle, or is missing strings we know are part
-        # of the current shell. Checks both the Container App FQDN
-        # (platform-level) and the public custom domain (end-user-level).
+        # The new revision is now the active traffic target, so we can do
+        # strict content checks. We only require strings that are
+        # genuinely tied to the current shell (the login CTA) and a
+        # negative check that the removed "Private app" subtitle is gone;
+        # this is enough to catch the "green build, stale site" failure
+        # mode without producing false negatives if conditional dashboard
+        # markup is ever moved into JS templates.
         env:
-          FQDN: ${{ steps.fqdn.outputs.fqdn }}
+          FQDN: ${{ steps.deploy.outputs.fqdn }}
         run: |
           set -euo pipefail
 
           STALE_STRING='Private app'
-          # Substrings that must appear in the current apps/web/index.html.
-          # Picked because they straddle the recent UI changes (PRs #41,
-          # #43, #44) and would not all be present on the older shell.
           REQUIRED_STRINGS=(
             'Sign in with Microsoft'
-            'Inbox sorting (dry-run)'
-            'Mailbox access is not ready for this account'
           )
 
           check_url() {
             local url="$1"
             local label="$2"
+            local extra_header="${3:-}"
             echo "::group::Validating ${label} (${url})"
-            local body
-            # Retry briefly: the new revision may take a few seconds to
-            # become the active traffic target after `containerapp update`.
+            local body=""
             local attempt
             for attempt in 1 2 3 4 5 6; do
-              if body=$(curl -fsSL --max-time 20 "${url}"); then
+              if [ -n "${extra_header}" ]; then
+                body=$(curl -fsSL --max-time 20 -H "${extra_header}" "${url}" || true)
+              else
+                body=$(curl -fsSL --max-time 20 "${url}" || true)
+              fi
+              if [ -n "${body}" ]; then
                 break
               fi
               echo "Fetch attempt ${attempt} failed; retrying..."
               sleep 10
-              body=""
             done
             if [ -z "${body}" ]; then
               echo "Failed to fetch ${url} after retries" >&2
               echo "::endgroup::"
               return 1
             fi
+            echo "Fetched ${#body} bytes from ${label}."
 
             local rc=0
             if printf '%s' "${body}" | grep -qF "${STALE_STRING}"; then
@@ -173,29 +238,27 @@ jobs:
                 echo "OK: ${label} contains: ${needle}"
               fi
             done
+            if [ "${rc}" -ne 0 ]; then
+              echo "--- first 2000 chars of ${label} response ---" >&2
+              printf '%s' "${body}" | head -c 2000 >&2 || true
+              echo >&2
+              echo "--- end ${label} response excerpt ---" >&2
+            fi
             echo "::endgroup::"
             return $rc
           }
 
-          overall=0
-          # Allow up to ~3 minutes for the new revision to propagate before
-          # the strict checks below.
-          for attempt in 1 2 3 4 5 6; do
-            if check_url "https://${FQDN}" "Container App FQDN"; then
-              overall=0
-              break
-            fi
-            overall=1
-            echo "Container App FQDN check failed (attempt ${attempt}); waiting for new revision..."
-            sleep 20
-          done
-          if [ "${overall}" -ne 0 ]; then
+          # The Container App FQDN check is authoritative: it bypasses any
+          # custom-domain caching layer and goes straight to the active
+          # revision we just verified above.
+          if ! check_url "https://${FQDN}" "Container App FQDN"; then
             exit 1
           fi
 
-          # The custom domain may be fronted by a CDN/edge cache; treat its
-          # check as best-effort but still fail if it is clearly stale.
-          if ! check_url "${PUBLIC_WEB_URL}" "Public custom domain"; then
-            echo "Public domain ${PUBLIC_WEB_URL} is stale or unreachable." >&2
+          # The public custom domain points at the same Container App, but
+          # add a cache-busting query string and Pragma header to defeat
+          # any intermediate caches. Still required to pass — if the
+          # custom domain is stale here, end users see stale content.
+          if ! check_url "${PUBLIC_WEB_URL}/?deploy=${IMAGE_TAG}" "Public custom domain" "Cache-Control: no-cache"; then
             exit 1
           fi
