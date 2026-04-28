@@ -1243,9 +1243,7 @@ async def bootstrap_mail_folders(
         metadata={
             "email": account.get("email"),
             "ensured_folder_count": len(folders),
-            "dyc_target_count": sum(
-                1 for folder in folders if folder.get("is_dyc_target")
-            ),
+            "dyc_target_count": sum(1 for folder in folders if folder.get("is_dyc_target")),
         },
     )
     return {
@@ -1279,9 +1277,7 @@ async def sync_mail_folder_inventory(
             "email": account.get("email"),
             "include_hidden": include_hidden,
             "folder_count": len(folders),
-            "dyc_target_count": sum(
-                1 for folder in folders if folder.get("is_dyc_target")
-            ),
+            "dyc_target_count": sum(1 for folder in folders if folder.get("is_dyc_target")),
         },
     )
     return {
@@ -1761,9 +1757,7 @@ def _account_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
                     "Linked account is missing a refresh token; mailbox calls "
                     "will fail until the user signs in again."
                 ),
-                "next_action": (
-                    f"Sign in again as {email} via /auth/microsoft/start"
-                ),
+                "next_action": f"Sign in again as {email} via /auth/microsoft/start",
             }
         )
 
@@ -1819,12 +1813,8 @@ def _account_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
                     "severity": "warning",
                     "scope": "account",
                     "account_email": email,
-                    "message": (
-                        f"No audit events in the last {age.days} days for {email}."
-                    ),
-                    "next_action": (
-                        "Investigate the connector worker / scheduled sync."
-                    ),
+                    "message": f"No audit events in the last {age.days} days for {email}.",
+                    "next_action": "Investigate the connector worker / scheduled sync.",
                 }
             )
 
