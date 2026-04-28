@@ -1455,17 +1455,35 @@ def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, An
     return events
 
 
+def _filter_rows_by_account(
+    rows: list[dict[str, Any]], account: str | None
+) -> list[dict[str, Any]]:
+    if not account:
+        return rows
+    needle = account.strip().lower()
+    if not needle:
+        return rows
+    return [row for row in rows if (row.get("email") or "").lower() == needle]
+
+
 @app.get("/activity")
 def activity_log(
     limit: int = Query(default=25, ge=1, le=100),
+    account: str | None = Query(default=None),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
+    scoped_rows = _filter_rows_by_account(rows, account)
+    if account and not scoped_rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No connected account with that email is linked to this session.",
+        )
 
     folder_events: list[dict[str, Any]] = []
     folder_available = False
-    for row in rows:
+    for row in scoped_rows:
         events = _load_folder_activity(row["account_id"], limit=limit)
         for event in events:
             event["account"] = {
@@ -1492,6 +1510,7 @@ def activity_log(
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
+        "scope": {"account": account} if account else {"account": None},
         "folder_activity": {
             "available": folder_available,
             "reason": folder_reason,
@@ -1635,11 +1654,28 @@ def _compute_alerts(
 
 @app.get("/alerts")
 def alerts(
+    account: str | None = Query(default=None),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
-    if rows:
+
+    if account:
+        scoped_rows = _filter_rows_by_account(rows, account)
+        if not scoped_rows:
+            raise HTTPException(
+                status_code=404,
+                detail="No connected account with that email is linked to this session.",
+            )
+        accounts = [
+            {
+                "account_id": row["account_id"],
+                "email": row["email"],
+                "mailbox_access_ready": bool(row["has_refresh_token"]),
+            }
+            for row in scoped_rows
+        ]
+    elif rows:
         accounts = [
             {
                 "account_id": row["account_id"],
@@ -1670,6 +1706,7 @@ def alerts(
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
+        "scope": {"account": account} if account else {"account": None},
         "counts": counts,
         "alerts": items,
     }

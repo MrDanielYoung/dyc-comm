@@ -941,6 +941,144 @@
         color: var(--muted);
       }
 
+      .app-shell {
+        display: grid;
+        grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .account-nav {
+        position: sticky;
+        top: 18px;
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-xl);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .account-nav-heading {
+        margin: 0;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .account-nav-list {
+        display: grid;
+        gap: 6px;
+      }
+
+      .account-nav-button {
+        display: grid;
+        gap: 2px;
+        text-align: left;
+        min-height: 56px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--text);
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .account-nav-button[aria-current="true"] {
+        border-color: rgba(74, 131, 197, 0.45);
+        background: rgba(74, 131, 197, 0.10);
+        box-shadow: inset 3px 0 0 var(--accent-deep);
+      }
+
+      .account-nav-button .account-nav-email {
+        font-size: 0.86rem;
+        font-weight: 600;
+        line-height: 1.2;
+        word-break: break-word;
+      }
+
+      .account-nav-button .account-nav-meta {
+        font-size: 0.7rem;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .account-nav-connect {
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px dashed rgba(74, 131, 197, 0.42);
+        background: rgba(74, 131, 197, 0.04);
+      }
+
+      .account-nav-connect h3 {
+        margin: 0;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .account-nav-connect p {
+        margin: 0;
+        font-size: 0.74rem;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .account-nav-connect .button-link {
+        min-height: 38px;
+        padding: 8px 10px;
+        font-size: 0.78rem;
+        text-align: center;
+        word-break: break-word;
+      }
+
+      .selected-account-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 0.74rem;
+        font-weight: 600;
+        background: rgba(74, 131, 197, 0.10);
+        color: var(--accent-deep);
+      }
+
+      .panel-account-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      @media (max-width: 860px) {
+        .app-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .account-nav {
+          position: static;
+        }
+
+        .account-nav-list {
+          grid-auto-flow: column;
+          grid-auto-columns: minmax(180px, max-content);
+          overflow-x: auto;
+          padding-bottom: 4px;
+        }
+
+        .account-nav-button {
+          min-height: 48px;
+        }
+      }
+
       .connect-account-card {
         display: grid;
         gap: 10px;
@@ -1066,6 +1204,41 @@
         </section>
 
         <div id="appView" hidden>
+          <div class="app-shell">
+            <aside
+              class="account-nav"
+              id="accountNav"
+              data-testid="account-nav"
+              aria-label="Connected accounts"
+            >
+              <p class="account-nav-heading">Accounts</p>
+              <div
+                class="account-nav-list"
+                id="accountNavList"
+                data-testid="account-nav-list"
+                role="tablist"
+                aria-orientation="vertical"
+              ></div>
+              <div
+                class="account-nav-connect"
+                id="accountNavConnect"
+                data-testid="account-nav-connect"
+                hidden
+              >
+                <h3>+ Add DHW account</h3>
+                <p>
+                  Link <code>daniel.young@digitalhealthworks.com</code> as a
+                  second mailbox.
+                </p>
+                <a
+                  class="button-link primary"
+                  id="accountNavConnectLink"
+                  data-testid="account-nav-connect-dhw"
+                  href="#"
+                >Connect DHW</a>
+              </div>
+            </aside>
+            <div class="app-main">
           <div class="shell">
             <section class="layout">
               <section class="panel connect-panel">
@@ -1188,9 +1361,17 @@
                     class="panel section-panel dashboard-panel"
                     data-testid="dashboard-panel"
                   >
-                    <h2 class="section-title">Operations dashboard</h2>
+                    <div class="panel-account-row">
+                      <h2 class="section-title">Operations dashboard</h2>
+                      <span
+                        class="selected-account-label"
+                        id="dashboardSelectedAccount"
+                        data-testid="selected-account-label"
+                        hidden
+                      ></span>
+                    </div>
                     <p class="empty-state">
-                      Live operational signals per connected account. Metrics tagged
+                      Live operational signals for the selected account. Metrics tagged
                       <span class="metric-tag pending">pending</span>
                       require ingestion or audit instrumentation that is not yet
                       wired up; they will stay empty until the connector pipeline
@@ -1249,7 +1430,15 @@
               >
                 <div class="shell">
                   <section class="panel section-panel" data-testid="activity-panel">
-                    <h2 class="section-title">Activity log</h2>
+                    <div class="panel-account-row">
+                      <h2 class="section-title">Activity log</h2>
+                      <span
+                        class="selected-account-label"
+                        id="activitySelectedAccount"
+                        data-testid="activity-selected-account"
+                        hidden
+                      ></span>
+                    </div>
                     <p class="empty-state">
                       Recent folder bootstrap / inventory-sync events. Per-message
                       movement events are
@@ -1280,7 +1469,15 @@
               >
                 <div class="shell">
                   <section class="panel section-panel" data-testid="alerts-panel">
-                    <h2 class="section-title">Alerts &amp; notices</h2>
+                    <div class="panel-account-row">
+                      <h2 class="section-title">Alerts &amp; notices</h2>
+                      <span
+                        class="selected-account-label"
+                        id="alertsSelectedAccount"
+                        data-testid="alerts-selected-account"
+                        hidden
+                      ></span>
+                    </div>
                     <p class="empty-state">
                       Computed from the current API state — no example or fabricated
                       items.
@@ -1353,6 +1550,8 @@
                   </section>
                 </div>
               </section>
+            </div>
+          </div>
             </div>
           </div>
         </div>
@@ -1435,12 +1634,24 @@
         alerts: document.getElementById("panel-alerts"),
         api: document.getElementById("panel-api"),
       };
+      const accountNavList = document.getElementById("accountNavList");
+      const accountNavConnect = document.getElementById("accountNavConnect");
+      const accountNavConnectLink = document.getElementById("accountNavConnectLink");
+      const dashboardSelectedAccount = document.getElementById("dashboardSelectedAccount");
+      const activitySelectedAccount = document.getElementById("activitySelectedAccount");
+      const alertsSelectedAccount = document.getElementById("alertsSelectedAccount");
+
+      const accountState = {
+        connected: [],
+        selectedEmail: null,
+      };
 
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
       headerSignInLink.href = SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
+      accountNavConnectLink.href = DHW_SIGN_IN_URL;
 
       function setHeaderUnauthenticated() {
         headerAccount.hidden = true;
@@ -1648,6 +1859,124 @@
           alertsList.innerHTML = `<p class="empty-state">Sign in to view alerts.</p>`;
         }
         setAlertsBadge(0, "info");
+        clearAccountNav();
+      }
+
+      function clearAccountNav() {
+        accountState.connected = [];
+        accountState.selectedEmail = null;
+        if (accountNavList) {
+          accountNavList.innerHTML = "";
+        }
+        if (accountNavConnect) {
+          accountNavConnect.hidden = true;
+        }
+        updateSelectedAccountLabels();
+      }
+
+      function updateSelectedAccountLabels() {
+        const labelText = accountState.selectedEmail || "All accounts";
+        const targets = [
+          dashboardSelectedAccount,
+          activitySelectedAccount,
+          alertsSelectedAccount,
+        ];
+        targets.forEach((node) => {
+          if (!node) return;
+          if (!accountState.connected.length) {
+            node.hidden = true;
+            node.textContent = "";
+            return;
+          }
+          node.hidden = false;
+          node.textContent = labelText;
+        });
+      }
+
+      function accountIsDhw(email) {
+        return (email || "").toLowerCase() === DHW_LOGIN_HINT.toLowerCase();
+      }
+
+      function renderAccountNav() {
+        if (!accountNavList) return;
+        const entries = accountState.connected || [];
+        if (!entries.length) {
+          accountNavList.innerHTML =
+            `<p class="empty-state" data-testid="account-nav-empty">No connected accounts yet.</p>`;
+        } else {
+          accountNavList.innerHTML = entries.map((entry) => {
+            const email = entry.email || "";
+            const isSelected = accountState.selectedEmail === email;
+            const status = entry.mailbox_access_ready ? "Mailbox ready" : (entry.status || "linked");
+            return `
+              <button
+                type="button"
+                class="account-nav-button"
+                role="tab"
+                data-testid="account-nav-button"
+                data-account-email="${escapeHtml(email)}"
+                aria-current="${isSelected ? "true" : "false"}"
+              >
+                <span class="account-nav-email">${escapeHtml(email)}</span>
+                <span class="account-nav-meta">${escapeHtml(status)}</span>
+              </button>
+            `;
+          }).join("");
+
+          accountNavList
+            .querySelectorAll("button[data-account-email]")
+            .forEach((node) => {
+              node.addEventListener("click", () => {
+                const email = node.dataset.accountEmail;
+                if (email) selectAccount(email);
+              });
+            });
+        }
+
+        const hasDhw = entries.some((entry) => accountIsDhw(entry.email));
+        if (accountNavConnect) {
+          accountNavConnect.hidden = hasDhw;
+        }
+
+        updateSelectedAccountLabels();
+      }
+
+      function selectAccount(email) {
+        if (!email) return;
+        if (accountState.selectedEmail === email) return;
+        accountState.selectedEmail = email;
+        renderAccountNav();
+        // Reload all account-scoped views for the new selection.
+        loadDashboard().catch((error) => {
+          dashboardAccountList.innerHTML =
+            `<p class="empty-state">Dashboard request failed: ${escapeHtml(error.message)}.</p>`;
+        });
+        loadActivity().catch(() => {});
+        loadAlerts().catch(() => {});
+      }
+
+      async function loadAccounts() {
+        try {
+          const response = await fetch(`${API_BASE}/accounts`, { credentials: "include" });
+          if (!response.ok) {
+            clearAccountNav();
+            return null;
+          }
+          const payload = await response.json();
+          const entries = (payload && payload.accounts) || [];
+          accountState.connected = entries;
+          if (
+            !accountState.selectedEmail ||
+            !entries.some((entry) => entry.email === accountState.selectedEmail)
+          ) {
+            accountState.selectedEmail = entries.length ? entries[0].email : null;
+          }
+          renderAccountNav();
+          return payload;
+        } catch (_error) {
+          clearAccountNav();
+          return null;
+        }
       }
 
       function setAlertsBadge(count, severity) {
@@ -1718,8 +2047,11 @@
       async function loadActivity() {
         if (!activityList) return;
         activityList.innerHTML = `<p class="empty-state">Loading activity…</p>`;
+        const path = accountState.selectedEmail
+          ? `/activity?account=${encodeURIComponent(accountState.selectedEmail)}`
+          : "/activity";
         try {
-          const response = await fetch(`${API_BASE}/activity`, { credentials: "include" });
+          const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
           if (!response.ok) {
             activityList.innerHTML =
               `<p class="empty-state">Activity unavailable (${response.status}).</p>`;
@@ -1762,8 +2094,11 @@
       async function loadAlerts() {
         if (!alertsList) return;
         alertsList.innerHTML = `<p class="empty-state">Loading alerts…</p>`;
+        const path = accountState.selectedEmail
+          ? `/alerts?account=${encodeURIComponent(accountState.selectedEmail)}`
+          : "/alerts";
         try {
-          const response = await fetch(`${API_BASE}/alerts`, { credentials: "include" });
+          const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
           if (!response.ok) {
             alertsList.innerHTML =
               `<p class="empty-state">Alerts unavailable (${response.status}).</p>`;
@@ -1852,6 +2187,9 @@
       }
 
       async function loadDashboard() {
+        if (accountState.selectedEmail) {
+          return loadDashboardForAccount(accountState.selectedEmail);
+        }
         const response = await fetch(`${API_BASE}/dashboard/summary`, {
           credentials: "include"
         });
@@ -1861,6 +2199,37 @@
         }
         const payload = await response.json();
         renderDashboard(payload);
+        return payload;
+      }
+
+      async function loadDashboardForAccount(email) {
+        const path = `/accounts/${encodeURIComponent(email)}/dashboard`;
+        const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+        if (!response.ok) {
+          dashboardAccountList.innerHTML =
+            `<p class="empty-state">Dashboard unavailable for ${escapeHtml(email)} (${response.status}).</p>`;
+          return null;
+        }
+        const payload = await response.json();
+        const single = {
+          account: payload.account,
+          folder_inventory: payload.folder_inventory,
+          email_volume: payload.email_volume,
+          action_activity: payload.action_activity,
+        };
+        const ready = single.account && single.account.mailbox_access_ready ? 1 : 0;
+        const folders = (single.folder_inventory && single.folder_inventory.total_folders) || 0;
+        const dycTargets =
+          (single.folder_inventory && single.folder_inventory.dyc_target_folders) || 0;
+        renderDashboard({
+          totals: {
+            connected_accounts: 1,
+            mailbox_ready_accounts: ready,
+            total_folders: folders,
+            dyc_target_folders: dycTargets,
+          },
+          accounts: [single],
+        });
         return payload;
       }
 
@@ -1939,6 +2308,8 @@
           }
           authNotice.textContent = `Mailbox connected, but folder inventory could not be loaded: ${error.message}`;
         }
+
+        await loadAccounts();
 
         try {
           await loadDashboard();
