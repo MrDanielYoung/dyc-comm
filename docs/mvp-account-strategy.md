@@ -77,7 +77,7 @@ Keep the folder structure intentionally lean.
 Interpretation:
 
 * `Inbox` means the message may require attention, a response or reply, decision, or manual review soon
-* `Review` means worth reading later, but not urgent and not part of the designated news stream; SMS notices, login PINs, etc. go here.
+* `10 - Review` is the canonical conservative / fallback folder. It is the destination for any message that needs a human eye but does not clearly belong in another numbered folder — including SMS notices and login PINs that the user wants out of `Inbox` but worth reading later. It is also the safe target for low-confidence AI classifications and for messages whose meaning depends on judgment (see "AI Routing And Safety Policy" below). Always written as `10 - Review` (with the numeric prefix); no other spelling — `Review`, `Review/Respond`, `review-respond`, `Needs Review`, etc. — is canonical.
 * `News` means approved publication/news sources only
 * `LinkedIn`means any message having to do with LinkedIn, from LinkedIn, third-party apps, services, etc. 
 * `Notifications` means informational mail that should not consume inbox space, but that's not marketing or sales
@@ -141,24 +141,68 @@ Future feature:
 
 * prepare a daily summary from the `News` folder with links back to source articles
 
-### Move To Review
+### Move To 10 - Review
 
-Move a message to `Review` when it is:
+`10 - Review` is the canonical conservative / fallback folder. It is the only safe destination when a message clearly does not belong in `Inbox` but also does not match a more specific numbered folder with high confidence.
 
-* reading material that is not urgent
-* not part of the approved `News` source list
-* not clearly a routine notification
+Move a message to `10 - Review` when it is:
+
+* reading material that is not urgent and not part of the approved `News` source list and not clearly a routine notification
+* an ambiguous business email where the right action is not obvious
+* a legal or contractual email that was not auto-routed to `70 - Contracts`
+* sensitive customer-, patient-adjacent, health, finance, access, or security-touching content where the safer action is human review
+* a short email without enough context to classify confidently
+* a thread where the newest message changes the meaning of earlier messages (so a previously-applied class is no longer reliable)
+* a message that requires judgment about tone, politics, or obligations — anything where a wrong move could be costly to reverse
+* any message where AI classification confidence is below the auto-route threshold (see "AI Routing And Safety Policy" below)
 
 Examples:
 
 * non-core newsletters
 * lower-priority long-form reading
 * professional updates that may still be worth a later scan
+* a contract-flavored email whose status is unclear (signed? counter-offer? expired?)
+* a one-line email like "Can we talk?" with no surrounding context
 
 Important:
 
-* `Review` should be used conservatively in phase 1
-* if we cannot define it crisply enough, we can temporarily minimize usage until rules stabilize
+* `10 - Review` should be used conservatively in phase 1 — it is not a dumping ground; it is the explicit "human, please look" pile
+* if a rule is not crisp enough to route confidently to a specific numbered folder, default to `10 - Review` rather than guessing
+* always write the folder name as `10 - Review` in code, copy, and docs
+
+## AI Routing And Safety Policy
+
+This section defines how AI classification interacts with the folder model. It applies to every automated and assisted move, and informs future model/prompt updates.
+
+### Confidence-based routing
+
+* **High confidence** (clear, deterministic match — e.g. allow-listed `News` sender, DMARC report, DocuSign envelope): route to the matching numbered folder.
+* **Medium confidence**: keep the message in `Inbox` *or* route to `10 - Review`, never to a specific numbered folder. Bias toward `Inbox` when the message looks like it might need a reply; bias toward `10 - Review` when it clearly does not need a reply but is not crisply categorizable.
+* **Low confidence**: always route to `10 - Review` (or leave in `Inbox`). Never guess a specific numbered folder under low confidence.
+
+### Categories that always route to 10 - Review
+
+Regardless of model confidence, these categories route to `10 - Review` (or stay in `Inbox`) and are never auto-sorted into a more specific folder:
+
+* ambiguous business emails
+* legal or contractual emails that are not unambiguously a sign-here document for `70 - Contracts`
+* sensitive customer-adjacent or patient-adjacent content
+* short emails without enough context to classify confidently
+* threads where the newest message changes the meaning of earlier messages
+* messages that require judgment about tone, politics, or obligations
+
+### Hard safety rules for AI
+
+* **No automatic delete.** The AI never deletes mail. Permanent deletion is out of scope for v1 (see architecture.md §9).
+* **No automatic send.** The AI never sends mail on the user's behalf. Drafts only; the user sends.
+* **No suppression of high-stakes mail.** Health, finance, meetings, access/auth, and VIP-sender mail are never moved out of `Inbox` by automation, even at high confidence — they may only be flagged for review.
+* **Human-in-the-loop for moves.** In phase 1, every mailbox-changing action requires user approval; the AI's role is to recommend, not to execute.
+* **Reversible-only actions.** The AI is permitted only reversible actions (label, move, draft). It is not permitted destructive or externally-visible actions (delete, send, forward).
+* **Audit every recommendation.** Every recommendation and every executed move is logged so the policy itself can be reviewed.
+
+### Why the fallback matters
+
+`10 - Review` is the load-bearing folder for safety. If the policy is uncertain, the model is uncertain, or a category sits in any of the always-route-to-review buckets above, `10 - Review` is the answer. It is preferable to surface too many messages for human review than to silently miscategorize a message the user actually needed to see.
 
 ### Move To Notifications
 
@@ -204,13 +248,13 @@ Microsoft 365 integration for:
 * move email to `News`
 * move email to `Notifications`
 
-Keep `Review` supported in the data model and UI, but use it cautiously at first.
+Keep `10 - Review` supported in the data model and UI, but use it cautiously at first.
 
 ### Phase 2
 
 Add:
 
-* safer use of `Review`
+* safer use of `10 - Review`
 * better sender/domain rules
 * dashboard for move review and correction
 
@@ -256,4 +300,14 @@ Before implementation, define:
 * the initial VIP sender list
 * the allowlist of `News` senders/domains
 * the first-pass rules for `Notifications`
-* whether `Review` should be enabled immediately or held back during the first move-only rollout
+* whether `10 - Review` should be enabled immediately or held back during the first move-only rollout
+
+## Operator Note: Existing Folders
+
+If a connected mailbox already has a folder spelled differently (`Review`, `Review/Respond`, `Needs Review`, etc.), it is recognized as an alias of `10 - Review` by the canonical-name resolver in `apps/api/app/main.py` (`_folder_spec_by_name`). Aliases are read-only — bootstrap creates `10 - Review` when no matching folder exists, but it does NOT rename or merge an existing legacy folder. Operator remediation, when desired, is manual:
+
+1. Inventory affected mailboxes via `/mail/folders/inventory` and look for `canonical_name = "10 - Review"` with `displayName != "10 - Review"`.
+2. In Outlook (or via a one-off Graph script), rename the existing folder to `10 - Review`, or move its contents into the bootstrapped `10 - Review` and delete the old folder.
+3. Re-run `/mail/folders/inventory/sync` so `mailbox_folder` rows reflect the new state.
+
+No destructive database migration ships with this change. Existing rows with a different `display_name` continue to work because alias matching is performed at runtime.
