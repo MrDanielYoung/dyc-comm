@@ -941,6 +941,105 @@
         color: var(--muted);
       }
 
+      .nondestructive-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(29, 127, 70, 0.28);
+        background: rgba(29, 127, 70, 0.08);
+        color: var(--success);
+        font-size: 0.82rem;
+        line-height: 1.4;
+      }
+
+      .nondestructive-banner strong {
+        font-weight: 700;
+      }
+
+      .sorting-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .sorting-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+
+      .sorting-summary strong {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      .sorting-table-wrap {
+        overflow-x: auto;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+      }
+
+      .sorting-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .sorting-table th,
+      .sorting-table td {
+        padding: 8px 10px;
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      .sorting-table th {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        background: rgba(246, 248, 251, 0.96);
+      }
+
+      .sorting-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .sorting-table .reasons-list,
+      .sorting-table .flags-list {
+        margin: 4px 0 0;
+        padding-left: 16px;
+        font-size: 0.74rem;
+        color: var(--muted);
+        line-height: 1.35;
+      }
+
+      .sorting-table .reasons-list li,
+      .sorting-table .flags-list li {
+        margin: 0;
+      }
+
+      .sorting-table .review-tag {
+        background: rgba(143, 90, 18, 0.12);
+        color: var(--warning);
+      }
+
+      .sorting-table .ok-tag {
+        background: rgba(29, 127, 70, 0.12);
+        color: var(--success);
+      }
+
+      .sorting-table .band-tag {
+        background: rgba(74, 131, 197, 0.12);
+        color: var(--accent-deep);
+      }
+
       .app-shell {
         display: grid;
         grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
@@ -1396,6 +1495,16 @@
                 class="tab"
                 role="tab"
                 type="button"
+                id="tab-sorting"
+                data-tab="sorting"
+                aria-selected="false"
+                aria-controls="panel-sorting"
+                data-testid="tab-sorting"
+              >Inbox Sorting</button>
+              <button
+                class="tab"
+                role="tab"
+                type="button"
                 id="tab-activity"
                 data-tab="activity"
                 aria-selected="false"
@@ -1514,6 +1623,27 @@
                     </div>
                   </section>
 
+                  <section
+                    class="panel section-panel"
+                    data-testid="dashboard-sorting-card"
+                  >
+                    <div class="panel-account-row">
+                      <h2 class="section-title">Inbox sorting (dry-run)</h2>
+                      <span class="metric-tag live">read-only</span>
+                    </div>
+                    <p class="metric-reason" id="dashboardSortingSummary" data-testid="dashboard-sorting-summary">
+                      No inbox dry-run has been recorded for this account yet.
+                    </p>
+                    <div class="sorting-actions">
+                      <button
+                        class="primary"
+                        type="button"
+                        id="dashboardSortingOpen"
+                        data-testid="dashboard-sorting-open"
+                      >Open inbox sorting</button>
+                    </div>
+                  </section>
+
                   <section class="panel section-panel">
                     <h2 class="section-title">Mailbox folders</h2>
                     <div class="folder-board">
@@ -1532,6 +1662,111 @@
                         </div>
                       </div>
                     </div>
+                  </section>
+                </div>
+              </section>
+
+              <section
+                role="tabpanel"
+                id="panel-sorting"
+                aria-labelledby="tab-sorting"
+                hidden
+              >
+                <div class="shell">
+                  <section
+                    class="panel section-panel"
+                    data-testid="sorting-panel"
+                  >
+                    <div class="panel-account-row">
+                      <h2 class="section-title">Inbox sorting (read-only dry-run)</h2>
+                      <span
+                        class="selected-account-label"
+                        id="sortingSelectedAccount"
+                        data-testid="sorting-selected-account"
+                        hidden
+                      ></span>
+                    </div>
+                    <div
+                      class="nondestructive-banner"
+                      data-testid="sorting-nondestructive-banner"
+                    >
+                      <span aria-hidden="true">&#9432;</span>
+                      <span>
+                        <strong>Read-only:</strong>
+                        this scan only reads recent inbox messages via Microsoft Graph
+                        and records what the classifier <em>would</em> do.
+                        <strong>No messages are moved, sent, or deleted.</strong>
+                        Unclear or low-confidence messages route to
+                        <code>10 - Review</code> for a human decision.
+                      </span>
+                    </div>
+                    <div class="sorting-actions">
+                      <button
+                        class="primary"
+                        type="button"
+                        id="sortingRunButton"
+                        data-testid="sorting-run-button"
+                      >Run inbox classification (dry-run)</button>
+                      <button
+                        class="secondary"
+                        type="button"
+                        id="sortingRefreshButton"
+                        data-testid="sorting-refresh-button"
+                      >Refresh log</button>
+                      <label class="metric-reason" for="sortingLimit">
+                        Limit
+                        <input
+                          id="sortingLimit"
+                          type="number"
+                          min="1"
+                          max="100"
+                          value="25"
+                          data-testid="sorting-limit"
+                          style="width: 64px; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;"
+                        />
+                      </label>
+                    </div>
+                    <p
+                      class="metric-reason"
+                      id="sortingStatus"
+                      data-testid="sorting-status"
+                    >Sign in to run a classification dry-run for the selected account.</p>
+                    <div
+                      class="sorting-summary"
+                      id="sortingSummary"
+                      data-testid="sorting-summary"
+                      hidden
+                    ></div>
+                    <div class="sorting-table-wrap">
+                      <table class="sorting-table" data-testid="sorting-table">
+                        <thead>
+                          <tr>
+                            <th>Received</th>
+                            <th>From / Subject</th>
+                            <th>Recommendation</th>
+                            <th>Confidence</th>
+                            <th>Reasons / Flags</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody id="sortingTableBody" data-testid="sorting-table-body">
+                          <tr>
+                            <td colspan="6" class="empty-state">
+                              No dry-run results loaded yet. Click
+                              <strong>Run inbox classification (dry-run)</strong>
+                              above to fetch the most recent inbox messages and
+                              record what would happen.
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p class="metric-reason">
+                      Acting on a recommendation (moving the message into the
+                      suggested folder) requires explicit, per-message
+                      confirmation and is not yet wired up in this build —
+                      see <code>docs/inbox-dryrun.md</code> for the runbook.
+                    </p>
                   </section>
                 </div>
               </section>
@@ -1744,6 +1979,7 @@
       const tabButtons = Array.from(document.querySelectorAll(".tab[data-tab]"));
       const tabPanels = {
         dashboard: document.getElementById("panel-dashboard"),
+        sorting: document.getElementById("panel-sorting"),
         activity: document.getElementById("panel-activity"),
         alerts: document.getElementById("panel-alerts"),
         api: document.getElementById("panel-api"),
@@ -1754,6 +1990,15 @@
       const dashboardSelectedAccount = document.getElementById("dashboardSelectedAccount");
       const activitySelectedAccount = document.getElementById("activitySelectedAccount");
       const alertsSelectedAccount = document.getElementById("alertsSelectedAccount");
+      const sortingSelectedAccount = document.getElementById("sortingSelectedAccount");
+      const sortingRunButton = document.getElementById("sortingRunButton");
+      const sortingRefreshButton = document.getElementById("sortingRefreshButton");
+      const sortingLimitInput = document.getElementById("sortingLimit");
+      const sortingStatus = document.getElementById("sortingStatus");
+      const sortingSummary = document.getElementById("sortingSummary");
+      const sortingTableBody = document.getElementById("sortingTableBody");
+      const dashboardSortingSummary = document.getElementById("dashboardSortingSummary");
+      const dashboardSortingOpen = document.getElementById("dashboardSortingOpen");
 
       const accountState = {
         connected: [],
@@ -1973,6 +2218,10 @@
           alertsList.innerHTML = `<p class="empty-state">Sign in to view alerts.</p>`;
         }
         setAlertsBadge(0, "info");
+        renderSortingTable([]);
+        renderSortingSummary(null);
+        updateDashboardSortingSummary(null);
+        setSortingStatus("Sign in to run a classification dry-run for the selected account.");
         clearAccountNav();
       }
 
@@ -1994,6 +2243,7 @@
           dashboardSelectedAccount,
           activitySelectedAccount,
           alertsSelectedAccount,
+          sortingSelectedAccount,
         ];
         targets.forEach((node) => {
           if (!node) return;
@@ -2067,6 +2317,7 @@
         });
         loadActivity().catch(() => {});
         loadAlerts().catch(() => {});
+        loadSortingLog().catch(() => {});
       }
 
       async function loadAccounts() {
@@ -2119,6 +2370,8 @@
           loadActivity().catch(() => {});
         } else if (tabName === "alerts") {
           loadAlerts().catch(() => {});
+        } else if (tabName === "sorting") {
+          loadSortingLog().catch(() => {});
         }
       }
 
@@ -2223,6 +2476,282 @@
         } catch (error) {
           alertsList.innerHTML =
             `<p class="empty-state">Alerts request failed: ${escapeHtml(error.message)}.</p>`;
+        }
+      }
+
+      function setSortingStatus(text, tone) {
+        if (!sortingStatus) return;
+        sortingStatus.textContent = text;
+        sortingStatus.className = "metric-reason";
+        if (tone === "error") {
+          sortingStatus.style.color = "var(--danger)";
+        } else if (tone === "success") {
+          sortingStatus.style.color = "var(--success)";
+        } else {
+          sortingStatus.style.removeProperty("color");
+        }
+      }
+
+      function renderSortingSummary(summary) {
+        if (!sortingSummary) return;
+        if (!summary) {
+          sortingSummary.hidden = true;
+          sortingSummary.innerHTML = "";
+          return;
+        }
+        const provider = summary.provider || {};
+        const parts = [
+          `<span><strong>${escapeHtml(String(summary.fetched ?? 0))}</strong> fetched</span>`,
+          `<span><strong>${escapeHtml(String(summary.classified ?? 0))}</strong> classified</span>`,
+          `<span><strong>${escapeHtml(String(summary.forced_review ?? 0))}</strong> forced to <code>${escapeHtml(summary.review_folder || "10 - Review")}</code></span>`,
+          `<span><strong>${escapeHtml(String(summary.errors ?? 0))}</strong> errors</span>`,
+          `<span>AI provider: <strong>${escapeHtml(provider.selected || "none")}</strong>${provider.consulted ? "" : " (not consulted)"}</span>`,
+          `<span><strong>0</strong> messages moved</span>`,
+        ];
+        sortingSummary.hidden = false;
+        sortingSummary.innerHTML = parts.join("");
+      }
+
+      function updateDashboardSortingSummary(summary) {
+        if (!dashboardSortingSummary) return;
+        if (!summary) {
+          dashboardSortingSummary.textContent =
+            "No inbox dry-run has been recorded for this account yet.";
+          return;
+        }
+        const fetched = summary.fetched ?? 0;
+        const classified = summary.classified ?? 0;
+        const forced = summary.forced_review ?? 0;
+        const errors = summary.errors ?? 0;
+        dashboardSortingSummary.textContent =
+          `Last dry-run: ${classified}/${fetched} classified, ${forced} routed to ${summary.review_folder || "10 - Review"}, ${errors} errors. No messages were moved.`;
+      }
+
+      function renderRecommendationCell(rec) {
+        if (!rec) return `<span class="metric-tag pending">no recommendation</span>`;
+        const folder = escapeHtml(rec.recommended_folder || "—");
+        const category = escapeHtml(rec.category || "—");
+        const tag = rec.forced_review
+          ? `<span class="metric-tag review-tag">forced review</span>`
+          : `<span class="metric-tag ok-tag">auto</span>`;
+        return `
+          <div><strong>${folder}</strong></div>
+          <div class="metric-reason">category: ${category}</div>
+          <div style="margin-top:4px;">${tag}</div>
+        `;
+      }
+
+      function renderConfidenceCell(rec) {
+        if (!rec) return "—";
+        const value = typeof rec.confidence === "number" ? rec.confidence : 0;
+        const band = escapeHtml(rec.confidence_band || "—");
+        return `
+          <div><strong>${(value * 100).toFixed(0)}%</strong></div>
+          <div style="margin-top:4px;">
+            <span class="metric-tag band-tag">${band}</span>
+          </div>
+        `;
+      }
+
+      function renderReasonsCell(rec) {
+        if (!rec) return "—";
+        const reasons = Array.isArray(rec.reasons) ? rec.reasons : [];
+        const flags = Array.isArray(rec.safety_flags) ? rec.safety_flags : [];
+        const reasonsHtml = reasons.length
+          ? `<ul class="reasons-list">${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
+          : `<p class="metric-reason">no reasons</p>`;
+        const flagsHtml = flags.length
+          ? `<ul class="flags-list">${flags.map((f) => `<li><strong>flag:</strong> ${escapeHtml(f)}</li>`).join("")}</ul>`
+          : "";
+        return reasonsHtml + flagsHtml;
+      }
+
+      function renderSortingRow(entry) {
+        const rec = entry.recommendation || (entry.recommended_folder ? {
+          recommended_folder: entry.recommended_folder,
+          category: entry.category,
+          confidence: entry.confidence,
+          confidence_band: entry.confidence_band,
+          reasons: entry.reasons,
+          safety_flags: entry.safety_flags,
+          forced_review: entry.forced_review,
+          provider_consulted: entry.provider_consulted,
+          provider: entry.provider,
+        } : null);
+        const subject = escapeHtml(entry.subject || "(no subject)");
+        const sender = escapeHtml(entry.sender || "—");
+        const received = escapeHtml(formatTimestamp(entry.received_at));
+        const status = escapeHtml(entry.status || "—");
+        const error = entry.error
+          ? `<div class="metric-reason" style="color: var(--danger);">${escapeHtml(entry.error)}</div>`
+          : "";
+        return `
+          <tr>
+            <td>${received}</td>
+            <td>
+              <div><strong>${subject}</strong></div>
+              <div class="metric-reason">${sender}</div>
+            </td>
+            <td>${renderRecommendationCell(rec)}</td>
+            <td>${renderConfidenceCell(rec)}</td>
+            <td>${renderReasonsCell(rec)}</td>
+            <td>
+              <div>${status}</div>
+              ${error}
+            </td>
+          </tr>
+        `;
+      }
+
+      function renderSortingTable(entries) {
+        if (!sortingTableBody) return;
+        if (!entries || !entries.length) {
+          sortingTableBody.innerHTML = `
+            <tr>
+              <td colspan="6" class="empty-state">
+                No dry-run results for this account yet. Click
+                <strong>Run inbox classification (dry-run)</strong> above.
+              </td>
+            </tr>
+          `;
+          return;
+        }
+        sortingTableBody.innerHTML = entries.map(renderSortingRow).join("");
+      }
+
+      function summarizeFromLog(payload) {
+        const entries = (payload && payload.entries) || [];
+        const classified = entries.filter((e) => e.status === "classified").length;
+        const errors = entries.filter((e) => e.status === "error").length;
+        const forced = entries.filter((e) => e.forced_review).length;
+        const providerNames = Array.from(
+          new Set(entries.map((e) => e.provider).filter(Boolean))
+        );
+        return {
+          fetched: entries.length,
+          classified,
+          errors,
+          forced_review: forced,
+          review_folder: payload && payload.review_folder ? payload.review_folder : "10 - Review",
+          provider: {
+            selected: providerNames.length === 1 ? providerNames[0] : (providerNames.length ? "mixed" : "none"),
+            consulted: entries.some((e) => e.provider_consulted),
+          },
+        };
+      }
+
+      async function loadSortingLog() {
+        if (!sortingTableBody) return null;
+        const account = accountState.selectedEmail;
+        if (!account) {
+          renderSortingTable([]);
+          renderSortingSummary(null);
+          updateDashboardSortingSummary(null);
+          setSortingStatus("Select a connected account to see its dry-run log.");
+          return null;
+        }
+        setSortingStatus(`Loading dry-run log for ${account}…`);
+        const limit = Number(sortingLimitInput && sortingLimitInput.value) || 25;
+        const path =
+          `/mail/inbox/classify-dryrun/log?account=${encodeURIComponent(account)}` +
+          `&limit=${encodeURIComponent(String(limit))}`;
+        try {
+          const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+          if (!response.ok) {
+            renderSortingTable([]);
+            renderSortingSummary(null);
+            updateDashboardSortingSummary(null);
+            setSortingStatus(
+              `Dry-run log unavailable (${response.status}).`,
+              "error"
+            );
+            return null;
+          }
+          const payload = await response.json();
+          const entries = (payload && payload.entries) || [];
+          renderSortingTable(entries);
+          const summary = summarizeFromLog(payload);
+          renderSortingSummary(summary);
+          updateDashboardSortingSummary(summary);
+          if (!entries.length) {
+            setSortingStatus(
+              `No dry-run rows yet for ${account}. Click ` +
+              `“Run inbox classification (dry-run)” to record what would happen — nothing will be moved.`
+            );
+          } else {
+            setSortingStatus(
+              `Showing ${entries.length} most recent dry-run rows for ${account}. No messages were moved.`,
+              "success"
+            );
+          }
+          return payload;
+        } catch (error) {
+          renderSortingTable([]);
+          renderSortingSummary(null);
+          updateDashboardSortingSummary(null);
+          setSortingStatus(`Dry-run log request failed: ${error.message}`, "error");
+          return null;
+        }
+      }
+
+      async function runSortingDryRun() {
+        if (!sortingRunButton) return;
+        const account = accountState.selectedEmail;
+        if (!account) {
+          setSortingStatus(
+            "Select a connected account before running the dry-run.",
+            "error"
+          );
+          return;
+        }
+        const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 25;
+        const limit = Math.min(Math.max(limitRaw, 1), 100);
+        sortingRunButton.disabled = true;
+        if (sortingRefreshButton) sortingRefreshButton.disabled = true;
+        setSortingStatus(
+          `Running read-only dry-run scan for ${account} (limit ${limit})…`
+        );
+        const path =
+          `/mail/inbox/classify-dryrun?account=${encodeURIComponent(account)}` +
+          `&limit=${encodeURIComponent(String(limit))}`;
+        try {
+          const response = await fetch(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const detail = (payload && payload.detail) || `HTTP ${response.status}`;
+            setSortingStatus(`Dry-run failed: ${detail}`, "error");
+            setRawOutput(`Dry-run (${response.status})`, payload || "no body");
+            return;
+          }
+          setRawOutput(`Dry-run (${response.status})`, payload);
+          const summary = {
+            fetched: payload.fetched || 0,
+            classified: payload.classified || 0,
+            errors: payload.errors || 0,
+            forced_review: ((payload.results || []).filter(
+              (r) => r.recommendation && r.recommendation.forced_review
+            ).length),
+            review_folder: payload.review_folder || "10 - Review",
+            provider: payload.provider || { selected: "none", consulted: false },
+          };
+          renderSortingSummary(summary);
+          updateDashboardSortingSummary(summary);
+          setSortingStatus(
+            `Dry-run complete for ${account}. ${summary.classified}/${summary.fetched} classified, ` +
+            `${summary.forced_review} routed to ${summary.review_folder}, ${summary.errors} errors. ` +
+            `No messages were moved.`,
+            "success"
+          );
+          // Pull the persisted log so the table reflects DB-of-record ordering.
+          await loadSortingLog();
+        } catch (error) {
+          setSortingStatus(`Dry-run request failed: ${error.message}`, "error");
+        } finally {
+          sortingRunButton.disabled = false;
+          if (sortingRefreshButton) sortingRefreshButton.disabled = false;
         }
       }
 
@@ -2435,6 +2964,9 @@
 
         // Alerts always load eagerly so the badge reflects current state.
         loadAlerts().catch(() => {});
+        // Pull a quick snapshot of the persisted dry-run log so the dashboard
+        // summary card and the Sorting tab populate immediately (no scan run).
+        loadSortingLog().catch(() => {});
       }
 
       async function signOut() {
@@ -2488,6 +3020,15 @@
       }
       if (alertsRefresh) {
         alertsRefresh.addEventListener("click", () => loadAlerts());
+      }
+      if (sortingRunButton) {
+        sortingRunButton.addEventListener("click", () => runSortingDryRun());
+      }
+      if (sortingRefreshButton) {
+        sortingRefreshButton.addEventListener("click", () => loadSortingLog());
+      }
+      if (dashboardSortingOpen) {
+        dashboardSortingOpen.addEventListener("click", () => activateTab("sorting"));
       }
       sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
       foldersButton.addEventListener("click", async () => {

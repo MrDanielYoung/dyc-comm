@@ -287,6 +287,103 @@ def test_cli_inbox_dryrun_subcommands_dispatch():
     assert args.limit == 25
 
 
+def test_classify_inbox_dryrun_response_shape_matches_ui_contract(monkeypatch):
+    """The web UI reads specific fields off the dry-run response — keep them stable.
+
+    The Inbox Sorting tab renders a summary line like
+    ``X classified, Y forced_review, Z errors`` and a table whose rows pull
+    ``recommendation.recommended_folder``, ``recommendation.confidence``,
+    ``recommendation.confidence_band``, ``recommendation.reasons``,
+    ``recommendation.safety_flags``, and ``recommendation.forced_review``.
+    Any rename here would silently empty the operator's view.
+    """
+    monkeypatch.setattr(main, "settings", _local_settings())
+    _clear_ai_env(monkeypatch)
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+
+    async def fake_token(email):
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+
+    async def fake_graph_get(token, path, params=None):
+        return {
+            "value": [
+                {
+                    "id": "msg-short",
+                    "receivedDateTime": "2026-04-28T10:00:00Z",
+                    "subject": "Hi",
+                    "bodyPreview": "Hey",
+                    "from": {"emailAddress": {"address": "alex@example.com"}},
+                    "parentFolderId": "inbox-folder-id",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(main, "_graph_get", fake_graph_get)
+    monkeypatch.setattr(main, "_persist_dry_run_classification", lambda **kwargs: None)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/classify-dryrun",
+        params={"account": "daniel@danielyoung.io", "limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    # Top-level fields the UI's summary line depends on.
+    expected_top_fields = (
+        "dry_run",
+        "destructive",
+        "fetched",
+        "classified",
+        "errors",
+        "review_folder",
+        "results",
+    )
+    for field in expected_top_fields:
+        assert field in payload, f"missing top-level field {field}"
+    assert payload["destructive"] is False
+    assert payload["dry_run"] is True
+
+    # Each result row must carry the keys the table renders.
+    result = payload["results"][0]
+    expected_row_fields = (
+        "provider_message_id",
+        "received_at",
+        "sender",
+        "subject",
+        "recommendation",
+        "status",
+    )
+    for field in expected_row_fields:
+        assert field in result, f"missing result field {field}"
+
+    rec = result["recommendation"]
+    assert rec is not None
+    for field in (
+        "recommended_folder",
+        "category",
+        "confidence",
+        "confidence_band",
+        "reasons",
+        "safety_flags",
+        "forced_review",
+        "provider_consulted",
+        "provider",
+    ):
+        assert field in rec, f"missing recommendation field {field}"
+
+    # The short body must force review per the safety policy.
+    assert rec["forced_review"] is True
+    assert rec["recommended_folder"] == classifier_module.REVIEW_FOLDER
+
+
 def test_protected_inbox_dryrun_endpoints_listed_in_protection_table():
     """Defense-in-depth: ensure both endpoints respond 401 with no cookie."""
     client = TestClient(main.app)
