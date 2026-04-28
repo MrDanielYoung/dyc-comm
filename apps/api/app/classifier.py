@@ -397,7 +397,7 @@ def classify(
         safety_flags=tuple(safety.flags),
         forced_review=forced_review,
         provider_consulted=False,
-        provider=(provider_config.provider if provider_config else None),
+        provider=provider_config.provider if provider_config else None,
     )
 
 

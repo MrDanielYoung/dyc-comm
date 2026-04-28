@@ -1209,7 +1209,7 @@ async def classify_recommend(request: Request) -> dict[str, Any]:
         body=str(body.get("body") or ""),
         sender=str(body.get("sender") or ""),
         is_thread_reply=bool(body.get("is_thread_reply") or False),
-        rule_category=(body.get("rule_category") or None),
+        rule_category=body.get("rule_category") or None,
         rule_confidence=rule_confidence,
     )
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
