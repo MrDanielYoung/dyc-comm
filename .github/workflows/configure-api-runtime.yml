@@ -26,12 +26,12 @@ env:
   WEB_APP_URL: https://comm.danielyoung.io
   API_BASE_URL: https://api.comm.danielyoung.io
   ALLOWED_ORIGINS: https://comm.danielyoung.io
-  # OAuth callback allow-list. Both values are non-secret and committed in
-  # code so the production identity policy is reviewable. Adding/removing a
-  # tenant or email is a workflow PR, not a portal click.
-  # Tenants: 99c0... = Decoding Options Inc., 3dd5... = Digital Health Works.
-  ALLOWED_MICROSOFT_TENANT_IDS: 99c0f350-71bd-47f9-ab6a-cf10bc76533a,3dd54b52-c31e-442e-8705-a56b839e59a7
-  ALLOWED_ACCOUNT_EMAILS: daniel@danielyoung.io,daniel.young@digitalhealthworks.com
+  # OAuth callback tenant allow-list seed. The Decoding Options tenant id
+  # is non-secret and committed here so the production identity policy is
+  # reviewable in code. The DHW and BW tenant ids are sourced from Key
+  # Vault at apply time (secrets `dhw-tid` and `bw-tid`) and concatenated
+  # onto this seed below — keeping partner tenant ids out of the repo.
+  ALLOWED_MICROSOFT_TENANT_IDS_SEED: 99c0f350-71bd-47f9-ab6a-cf10bc76533a
 
 jobs:
   configure-runtime:
@@ -83,8 +83,26 @@ jobs:
             MICROSOFT_ENTRA_TENANT_ID="$(fetch_secret microsoft-entra-tenant-id)"
             echo "Fetching secret: dyc-comm-prod-value"
             MICROSOFT_ENTRA_CLIENT_SECRET="$(fetch_secret dyc-comm-prod-value)"
+            echo "Fetching secret: dhw-tid"
+            DHW_TID="$(fetch_secret dhw-tid)"
+            echo "Fetching secret: bw-tid"
+            BW_TID="$(fetch_secret bw-tid)"
+            echo "Fetching secret: allowed-account-emails"
+            ALLOWED_ACCOUNT_EMAILS="$(fetch_secret allowed-account-emails)"
 
-            for var in DATABASE_URL MICROSOFT_ENTRA_CLIENT_ID MICROSOFT_ENTRA_TENANT_ID MICROSOFT_ENTRA_CLIENT_SECRET; do
+            # Build the tenant allow-list from the committed Decoding Options
+            # seed plus the DHW and BW tenant ids fetched from Key Vault.
+            ALLOWED_MICROSOFT_TENANT_IDS="${ALLOWED_MICROSOFT_TENANT_IDS_SEED},${DHW_TID},${BW_TID}"
+
+            for var in \
+              DATABASE_URL \
+              MICROSOFT_ENTRA_CLIENT_ID \
+              MICROSOFT_ENTRA_TENANT_ID \
+              MICROSOFT_ENTRA_CLIENT_SECRET \
+              DHW_TID \
+              BW_TID \
+              ALLOWED_ACCOUNT_EMAILS \
+              ALLOWED_MICROSOFT_TENANT_IDS; do
               if [[ -z "${!var:-}" ]]; then
                 echo "::error::Required runtime variable '${var}' is empty before applying Container App settings." >&2
                 exit 1

@@ -61,8 +61,8 @@ These mirror `apps/api/.env.example` and `infra/azure/api-runtime-settings.env.e
 | `API_BASE_URL` | Public origin of the API; reported by `/config-check`. |
 | `ALLOWED_ORIGINS` | Optional comma-separated CORS allowlist. Defaults to `WEB_APP_URL`. |
 | `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Container App Key Vault refs; `false` when the workflow copies values from Key Vault into plain Container App env vars. |
-| `ALLOWED_MICROSOFT_TENANT_IDS` | Comma-separated tenant id allow-list enforced by the OAuth callback. When unset, falls back to `MICROSOFT_ENTRA_TENANT_ID` only — set explicitly to admit external tenants (e.g. DHW). Non-secret. |
-| `ALLOWED_ACCOUNT_EMAILS` | Optional comma-separated email allow-list enforced by the OAuth callback. When set, only these addresses can complete sign-in even if their tenant is allow-listed. Non-secret. |
+| `ALLOWED_MICROSOFT_TENANT_IDS` | Comma-separated tenant id allow-list enforced by the OAuth callback. Built at apply time from the committed Decoding Options seed plus partner tenant ids fetched from Key Vault (`dhw-tid`, `bw-tid`). When unset on a container, the API falls back to `MICROSOFT_ENTRA_TENANT_ID` only. |
+| `ALLOWED_ACCOUNT_EMAILS` | Comma-separated per-user email allow-list enforced by the OAuth callback. **Required** alongside `ALLOWED_MICROSOFT_TENANT_IDS`: a tenant allow-list alone would admit any user in DHW/BW. Sourced from Key Vault secret `allowed-account-emails`. |
 
 The Entra values are seeded now so the API container can boot with the same
 configuration shape across environments and so `/config-check` can report
@@ -174,6 +174,37 @@ non-empty):
 | `MICROSOFT_ENTRA_CLIENT_ID` | `microsoft-entra-client-id` |
 | `MICROSOFT_ENTRA_TENANT_ID` | `microsoft-entra-tenant-id` |
 | `MICROSOFT_ENTRA_CLIENT_SECRET` | `dyc-comm-prod-value` |
+| `ALLOWED_MICROSOFT_TENANT_IDS` (DHW partner tenant id) | `dhw-tid` |
+| `ALLOWED_MICROSOFT_TENANT_IDS` (BW partner tenant id) | `bw-tid` |
+| `ALLOWED_ACCOUNT_EMAILS` | `allowed-account-emails` |
+
+`ALLOWED_MICROSOFT_TENANT_IDS` is built at apply time as the comma-separated
+concatenation of the Decoding Options tenant id
+(`99c0f350-71bd-47f9-ab6a-cf10bc76533a`, committed in the workflow as
+`ALLOWED_MICROSOFT_TENANT_IDS_SEED`) plus the values fetched from Key
+Vault secrets `dhw-tid` and `bw-tid`. Partner tenant ids stay in Key
+Vault rather than in the repo, while the Decoding Options tenant id —
+which identifies the operator of this service — remains visible in code
+review.
+
+`allowed-account-emails` holds the per-user email allow-list as a
+comma-separated string, for example:
+
+```
+daniel@danielyoung.io,daniel.young@digitalhealthworks.com,<your-bw-email>
+```
+
+> **Why a tenant allow-list alone is insufficient.** The OAuth callback
+> denies any sign-in whose `tid` is not in `ALLOWED_MICROSOFT_TENANT_IDS`,
+> but a tenant such as DHW or BW contains every employee in that org, not
+> just the people authorized to use this app. Without
+> `ALLOWED_ACCOUNT_EMAILS`, the policy degrades to "anyone in an allow-
+> listed tenant," which is far too broad for a tool that exposes a
+> personal mailbox and downstream Graph data. Treating
+> `allowed-account-emails` as a Key Vault-sourced secret keeps the
+> per-user allow-list out of the repo and forces an explicit secret
+> update (audited via Key Vault access logs) whenever a person is added
+> or removed.
 
 > **Warning:** `MICROSOFT_ENTRA_CLIENT_SECRET` must be sourced from the
 > Key Vault secret holding the Entra client secret **value**
@@ -189,12 +220,15 @@ required Key Vault secret is missing, disabled, or empty the workflow
 fails before it touches the Container App.
 
 Non-secret URLs (`MICROSOFT_ENTRA_REDIRECT_URI`, `WEB_APP_URL`,
-`API_BASE_URL`, `ALLOWED_ORIGINS`), `APP_ENV`, and the Key Vault name
+`API_BASE_URL`, `ALLOWED_ORIGINS`), `APP_ENV`, the Key Vault name, and
+the Decoding Options tenant id seed (`ALLOWED_MICROSOFT_TENANT_IDS_SEED`)
 are committed in the workflow `env` block so the production runtime
-contract is visible in code review. Secret values fetched from Key
-Vault are masked with `::add-mask::` and stay in local shell variables
-inside a single Azure CLI step; they are not written to `$GITHUB_ENV`
-or echoed in logs.
+contract is visible in code review. Values fetched from Key Vault —
+including `dhw-tid`, `bw-tid`, and `allowed-account-emails` — are masked
+with `::add-mask::` and stay in local shell variables inside a single
+Azure CLI step; they are not written to `$GITHUB_ENV` or echoed in logs,
+and the workflow validates that every fetched secret is non-empty before
+calling `az containerapp update`.
 
 Because the workflow currently materializes secret values into plain
 Container App env vars (rather than wiring Container App Key Vault
