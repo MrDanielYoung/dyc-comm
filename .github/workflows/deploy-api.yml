@@ -10,11 +10,19 @@ name: Deploy API
 #   Configure API Runtime workflow.
 #
 #   This workflow now does two narrow things:
-#     1. Build and push the API image to ACR via `az acr build`
-#        (server-side build, OIDC-authenticated, no registry creds needed).
+#     1. Build and push the API image to ACR via `docker login` + `docker
+#        build` + `docker push`, using the REGISTRY_USERNAME /
+#        REGISTRY_PASSWORD secrets that the prior working deploy used.
+#        We avoid `az acr build` here because it relies on ACR Tasks
+#        (`scheduleRun`/`Microsoft.ContainerRegistry/registries/scheduleRun/action`),
+#        which the GitHub OIDC federated principal does not currently hold.
+#        Docker push only requires the existing registry username/password
+#        scope, so the build succeeds without granting additional ACR Tasks
+#        RBAC to the OIDC identity.
 #     2. Update ONLY the container image on the existing Container App via
-#        `az containerapp update --image`. This creates a new revision that
-#        inherits the existing runtime env vars rather than replacing them.
+#        `az containerapp update --image` (still authenticated via Azure
+#        OIDC login). This creates a new revision that inherits the
+#        existing runtime env vars rather than replacing them.
 #
 #   Runtime environment variables (DATABASE_URL, Microsoft Entra config,
 #   ALLOWED_* allow-lists, etc.) are owned exclusively by
@@ -60,27 +68,30 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and push API image to ACR
-        # Server-side build via ACR Tasks. Uses the OIDC-authenticated
-        # Azure CLI session, so no REGISTRY_USERNAME / REGISTRY_PASSWORD
-        # secrets are required. The federated identity must hold AcrPush
-        # on the registry.
-        #
-        # azure/cli@v2 runs the inlineScript inside a Docker container and
-        # does not forward arbitrary workflow `env:` vars into that
-        # container, so values are interpolated via `${{ env.X }}` at the
-        # GitHub Actions level rather than referenced as shell variables.
-        uses: azure/cli@v2
+      - name: Log in to ACR with registry credentials
+        # Use the known-working REGISTRY_USERNAME / REGISTRY_PASSWORD
+        # secrets rather than the OIDC-authenticated `az acr login`. This
+        # sidesteps the ACR Tasks `scheduleRun` RBAC requirement that
+        # `az acr build` needs and that the federated identity does not
+        # currently have.
+        uses: docker/login-action@v3
         with:
-          azcliversion: latest
-          inlineScript: |
-            set -euo pipefail
-            az acr build \
-              --registry "${{ env.REGISTRY_NAME }}" \
-              --image "${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}" \
-              --file apps/api/Dockerfile \
-              apps/api \
-              --output none
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push API image
+        # Plain docker build/push against ACR. Only AcrPush-equivalent
+        # scope is required, which the registry username/password already
+        # provides. No ACR Tasks permissions needed.
+        run: |
+          set -euo pipefail
+          FULL_IMAGE="${REGISTRY_URL}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker build \
+            -f apps/api/Dockerfile \
+            -t "${FULL_IMAGE}" \
+            apps/api
+          docker push "${FULL_IMAGE}"
 
       - name: Update Container App image only (preserves runtime env)
         # IMPORTANT: only `--image` is set here. Runtime environment
