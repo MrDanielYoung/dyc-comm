@@ -593,7 +593,7 @@
 
       .dashboard-totals {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
         gap: 10px;
       }
 
@@ -750,6 +750,116 @@
 
       .tabpanels > [role="tabpanel"][hidden] {
         display: none !important;
+      }
+
+      .period-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .period-toolbar .label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .period-toolbar .period-buttons {
+        display: inline-flex;
+        gap: 4px;
+        padding: 4px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.85);
+      }
+
+      .period-toolbar .period-button {
+        appearance: none;
+        min-height: 28px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-size: 0.78rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .period-toolbar .period-button[aria-pressed="true"] {
+        background: rgba(74, 131, 197, 0.16);
+        color: var(--accent-deep);
+      }
+
+      .sparkline {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 56px;
+        padding: 6px 0 2px;
+      }
+
+      .sparkline .bar {
+        flex: 1 1 auto;
+        min-width: 4px;
+        background: var(--accent);
+        border-radius: 3px 3px 0 0;
+        opacity: 0.85;
+      }
+
+      .sparkline .bar.empty {
+        background: rgba(74, 131, 197, 0.15);
+      }
+
+      .sparkline-axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.65rem;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+
+      .folder-breakdown {
+        display: grid;
+        gap: 4px;
+      }
+
+      .folder-breakdown .folder-bar-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 60px;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .folder-breakdown .folder-bar-track {
+        position: relative;
+        height: 14px;
+        background: rgba(74, 131, 197, 0.08);
+        border-radius: 4px;
+        overflow: hidden;
+      }
+
+      .folder-breakdown .folder-bar-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        background: var(--accent);
+        opacity: 0.75;
+      }
+
+      .folder-breakdown .folder-bar-name {
+        font-size: 0.78rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .folder-breakdown .folder-bar-count {
+        font-size: 0.78rem;
+        color: var(--muted);
+        text-align: right;
       }
 
       .activity-list,
@@ -1049,13 +1159,40 @@
                     class="panel section-panel dashboard-panel"
                     data-testid="dashboard-panel"
                   >
-                    <h2 class="section-title">Operations dashboard</h2>
+                    <div class="dashboard-account-header">
+                      <h2 class="section-title">Operations dashboard</h2>
+                      <div class="period-toolbar" data-testid="period-toolbar">
+                        <span class="label">Window</span>
+                        <div class="period-buttons" role="group" aria-label="Window">
+                          <button
+                            type="button"
+                            class="period-button"
+                            data-window="1"
+                            aria-pressed="false"
+                          >24h</button>
+                          <button
+                            type="button"
+                            class="period-button"
+                            data-window="7"
+                            aria-pressed="true"
+                          >7d</button>
+                          <button
+                            type="button"
+                            class="period-button"
+                            data-window="30"
+                            aria-pressed="false"
+                          >30d</button>
+                        </div>
+                      </div>
+                    </div>
                     <p class="empty-state">
-                      Live operational signals per connected account. Metrics tagged
+                      Live operational signals per connected account.
+                      <span class="metric-tag live">live</span>
+                      tiles read straight from <code>message_sighting</code> and
+                      <code>sync_event</code>. Tiles tagged
                       <span class="metric-tag pending">pending</span>
-                      require ingestion or audit instrumentation that is not yet
-                      wired up; they will stay empty until the connector pipeline
-                      lands.
+                      depend on instrumentation that is not yet wired (today: the
+                      automated move worker).
                     </p>
                     <div class="dashboard-totals" id="dashboardTotals">
                       <div class="dashboard-tile">
@@ -1073,6 +1210,22 @@
                       <div class="dashboard-tile">
                         <p class="label">DYC-target folders</p>
                         <p class="value" id="totalDycTargets">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Emails seen <span class="metric-tag live">live</span></p>
+                        <p class="value" id="totalMessagesIn">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Persisted <span class="metric-tag live">live</span></p>
+                        <p class="value" id="totalMessagesPersisted">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Moved <span class="metric-tag pending">pending</span></p>
+                        <p class="value" id="totalMessagesMoved">0</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Sync errors <span class="metric-tag live">live</span></p>
+                        <p class="value" id="totalErrors">—</p>
                       </div>
                     </div>
                     <div id="dashboardAccountList">
@@ -1110,25 +1263,32 @@
               >
                 <div class="shell">
                   <section class="panel section-panel" data-testid="activity-panel">
-                    <h2 class="section-title">Activity log</h2>
+                    <h2 class="section-title">Sync events</h2>
                     <p class="empty-state">
-                      Recent folder bootstrap / inventory-sync events. Per-message
-                      movement events are
-                      <span class="metric-tag pending">pending</span>
-                      until the connector worker is wired up — see API / Diagnostics.
+                      Real <code>sync_event</code> rows recorded by the
+                      folder/message sync endpoints — folder.bootstrap,
+                      folder.inventory.sync, messages.sync. Status, counts, and
+                      errors come straight from the database.
                     </p>
                     <div class="action-row">
                       <button class="secondary" id="activityRefresh" type="button">
                         Refresh activity
                       </button>
                     </div>
+                    <div class="activity-list" id="syncEventsList">
+                      <p class="empty-state">Loading sync events…</p>
+                    </div>
+
+                    <h2 class="section-title">Folder activity</h2>
                     <div class="activity-list" id="activityList">
                       <p class="empty-state">Loading activity…</p>
                     </div>
+
                     <h2 class="section-title">Message movement</h2>
                     <p class="metric-reason" id="messageMovementReason">
                       Pending instrumentation.
                     </p>
+                    <div class="activity-list" id="movementEventsList"></div>
                   </section>
                 </div>
               </section>
@@ -1208,6 +1368,10 @@
                         <strong>Bootstrap</strong>
                         <span>POST `/mail/folders/bootstrap`</span>
                       </button>
+                      <button class="endpoint-button" id="messagesSyncButton" type="button" disabled>
+                        <strong>Sync messages</strong>
+                        <span>POST `/mail/messages/sync`</span>
+                      </button>
                     </div>
                     <h2 class="section-title">Last response</h2>
                     <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
@@ -1279,7 +1443,16 @@
       const totalReady = document.getElementById("totalReady");
       const totalFolders = document.getElementById("totalFolders");
       const totalDycTargets = document.getElementById("totalDycTargets");
+      const totalMessagesIn = document.getElementById("totalMessagesIn");
+      const totalMessagesPersisted = document.getElementById("totalMessagesPersisted");
+      const totalMessagesMoved = document.getElementById("totalMessagesMoved");
+      const totalErrors = document.getElementById("totalErrors");
       const dashboardAccountList = document.getElementById("dashboardAccountList");
+      const messagesSyncButton = document.getElementById("messagesSyncButton");
+      const periodButtons = Array.from(document.querySelectorAll(".period-button"));
+      const syncEventsList = document.getElementById("syncEventsList");
+      const movementEventsList = document.getElementById("movementEventsList");
+      let currentWindowDays = 7;
       const connectDhwLink = document.getElementById("connectDhwLink");
       const connectGenericLink = document.getElementById("connectGenericLink");
       const activityList = document.getElementById("activityList");
@@ -1351,6 +1524,7 @@
         foldersButton.disabled = true;
         inventorySyncButton.disabled = true;
         bootstrapButton.disabled = true;
+        if (messagesSyncButton) messagesSyncButton.disabled = true;
       }
 
       function clearMailboxView() {
@@ -1414,6 +1588,7 @@
         foldersButton.disabled = !mailboxReady;
         inventorySyncButton.disabled = !mailboxReady;
         bootstrapButton.disabled = !mailboxReady;
+        if (messagesSyncButton) messagesSyncButton.disabled = !mailboxReady;
       }
 
       function renderFolderBucket(element, folders, emptyText) {
@@ -1498,9 +1673,19 @@
         totalReady.textContent = "—";
         totalFolders.textContent = "—";
         totalDycTargets.textContent = "—";
+        if (totalMessagesIn) totalMessagesIn.textContent = "—";
+        if (totalMessagesPersisted) totalMessagesPersisted.textContent = "—";
+        if (totalMessagesMoved) totalMessagesMoved.textContent = "0";
+        if (totalErrors) totalErrors.textContent = "—";
         dashboardAccountList.innerHTML = `<p class="empty-state">Sign in to view the operations dashboard.</p>`;
         if (activityList) {
           activityList.innerHTML = `<p class="empty-state">Sign in to view recent activity.</p>`;
+        }
+        if (syncEventsList) {
+          syncEventsList.innerHTML = `<p class="empty-state">Sign in to view sync events.</p>`;
+        }
+        if (movementEventsList) {
+          movementEventsList.innerHTML = "";
         }
         if (alertsList) {
           alertsList.innerHTML = `<p class="empty-state">Sign in to view alerts.</p>`;
@@ -1541,6 +1726,58 @@
         button.addEventListener("click", () => activateTab(button.dataset.tab));
       });
 
+      function renderSyncEvents(syncActivity) {
+        if (!syncEventsList) return;
+        const events = (syncActivity && syncActivity.events) || [];
+        if (!events.length) {
+          const reason = (syncActivity && syncActivity.reason)
+            || "No sync events recorded yet for this window. Run a folder or messages sync to populate this feed.";
+          syncEventsList.innerHTML = `<p class="empty-state">${escapeHtml(reason)}</p>`;
+          return;
+        }
+        syncEventsList.innerHTML = events.map((event) => {
+          const account = event.account || {};
+          const status = event.status || "unknown";
+          const counts = [];
+          if (event.folders_seen != null) counts.push(`${event.folders_seen} folders`);
+          if (event.messages_seen != null) counts.push(`${event.messages_seen} messages seen`);
+          if (event.messages_persisted != null) {
+            counts.push(`${event.messages_persisted} persisted`);
+          }
+          if (event.errors) counts.push(`${event.errors} errors`);
+          const tag = status === "error" ? "error" : status === "success" ? "success" : status;
+          return `
+            <div class="activity-row">
+              <div>
+                <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(event.operation || "sync")}</p>
+                <p class="activity-title">${escapeHtml(counts.join(" · ") || "(no counters)")}</p>
+                <p class="activity-account">${escapeHtml(account.email || "")}${event.error_message ? ` — ${escapeHtml(event.error_message)}` : ""}</p>
+              </div>
+              <span class="folder-entry-tag">${escapeHtml(tag)}</span>
+            </div>
+          `;
+        }).join("");
+      }
+
+      function renderMovementEvents(movement) {
+        if (!movementEventsList) return;
+        const events = (movement && movement.events) || [];
+        if (!events.length) {
+          movementEventsList.innerHTML = "";
+          return;
+        }
+        movementEventsList.innerHTML = events.map((event) => `
+          <div class="activity-row">
+            <div>
+              <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(event.event_type || "")}</p>
+              <p class="activity-title">${escapeHtml(event.source_folder || "?")} → ${escapeHtml(event.target_folder || "?")}</p>
+              <p class="activity-account">${escapeHtml((event.account && event.account.email) || "")}${event.error_message ? ` — ${escapeHtml(event.error_message)}` : ""}</p>
+            </div>
+            <span class="folder-entry-tag">${escapeHtml(event.status || "")}</span>
+          </div>
+        `).join("");
+      }
+
       function renderActivity(payload) {
         if (!activityList) return;
         const folder = payload && payload.folder_activity;
@@ -1548,7 +1785,11 @@
         const movement = payload && payload.message_movement;
         if (movement && movement.reason) {
           messageMovementReason.textContent = movement.reason;
+        } else if (movement && movement.available) {
+          messageMovementReason.textContent = "Live message-movement events.";
         }
+        renderSyncEvents(payload && payload.sync_activity);
+        renderMovementEvents(movement);
         if (!events.length) {
           const reason = (folder && folder.reason)
             || "No folder activity yet — bootstrap or sync the inventory to populate this feed.";
@@ -1576,11 +1817,21 @@
       async function loadActivity() {
         if (!activityList) return;
         activityList.innerHTML = `<p class="empty-state">Loading activity…</p>`;
+        if (syncEventsList) {
+          syncEventsList.innerHTML = `<p class="empty-state">Loading sync events…</p>`;
+        }
         try {
-          const response = await fetch(`${API_BASE}/activity`, { credentials: "include" });
+          const response = await fetch(
+            `${API_BASE}/activity?window_days=${currentWindowDays}`,
+            { credentials: "include" }
+          );
           if (!response.ok) {
             activityList.innerHTML =
               `<p class="empty-state">Activity unavailable (${response.status}).</p>`;
+            if (syncEventsList) {
+              syncEventsList.innerHTML =
+                `<p class="empty-state">Sync events unavailable (${response.status}).</p>`;
+            }
             return;
           }
           const payload = await response.json();
@@ -1635,7 +1886,64 @@
         }
       }
 
-      function renderDashboardAccount(entry) {
+      function renderSparkline(byDay, windowDays) {
+        const days = Array.isArray(byDay) ? byDay : [];
+        if (!days.length) {
+          return `
+            <div class="sparkline">
+              ${Array.from({ length: Math.min(windowDays, 30) }, () =>
+                `<span class="bar empty" style="height: 6px"></span>`
+              ).join("")}
+            </div>
+          `;
+        }
+        const maxValue = Math.max(...days.map((entry) => Number(entry.messages_in) || 0), 1);
+        const bars = days
+          .map((entry) => {
+            const value = Number(entry.messages_in) || 0;
+            const height = Math.max(2, Math.round((value / maxValue) * 48));
+            const empty = value === 0 ? " empty" : "";
+            return `<span class="bar${empty}" style="height: ${height}px" title="${escapeHtml(entry.day)}: ${value}"></span>`;
+          })
+          .join("");
+        const first = days[0]?.day || "";
+        const last = days[days.length - 1]?.day || "";
+        return `
+          <div class="sparkline">${bars}</div>
+          <div class="sparkline-axis"><span>${escapeHtml(first)}</span><span>${escapeHtml(last)}</span></div>
+        `;
+      }
+
+      function renderFolderBreakdown(byFolder) {
+        const rows = Array.isArray(byFolder) ? byFolder : [];
+        if (!rows.length) {
+          return `<p class="metric-reason">No folder breakdown yet.</p>`;
+        }
+        const max = Math.max(...rows.map((row) => Number(row.messages_in) || 0), 1);
+        return `
+          <div class="folder-breakdown">
+            ${rows
+              .map((row) => {
+                const value = Number(row.messages_in) || 0;
+                const pct = Math.round((value / max) * 100);
+                return `
+                  <div class="folder-bar-row">
+                    <div>
+                      <p class="folder-bar-name" title="${escapeHtml(row.folder)}">${escapeHtml(row.folder)}</p>
+                      <div class="folder-bar-track">
+                        <div class="folder-bar-fill" style="width: ${pct}%"></div>
+                      </div>
+                    </div>
+                    <span class="folder-bar-count">${value}</span>
+                  </div>
+                `;
+              })
+              .join("")}
+          </div>
+        `;
+      }
+
+      function renderDashboardAccount(entry, windowDays) {
         const account = entry.account || {};
         const folder = entry.folder_inventory || {};
         const volume = entry.email_volume || {};
@@ -1649,8 +1957,24 @@
           : "Awaiting folder inventory sync";
         const folderReason = folder.available ? "" : (folder.reason || "");
 
-        const volumeReason = volume.reason || "Email ingestion not yet wired.";
-        const actionReason = action.reason || "Action logging not yet wired.";
+        const volumeTag = volume.available
+          ? `<span class="metric-tag live">live</span>`
+          : `<span class="metric-tag pending">pending</span>`;
+        const volumeValue = volume.available
+          ? `<strong>${volume.messages_in ?? 0}</strong> seen · ${volume.messages_persisted ?? 0} persisted · ${volume.errors ?? 0} errors`
+          : "Run /mail/messages/sync to start collecting";
+        const volumeReason = volume.available ? "" : (volume.reason || "");
+        const lastSync = volume.last_sync_at
+          ? `Last sync ${formatTimestamp(volume.last_sync_at)} · ${escapeHtml(volume.last_sync_status || "")}`
+          : "No sync yet";
+
+        const actionTag = action.available
+          ? `<span class="metric-tag live">live</span>`
+          : `<span class="metric-tag pending">pending</span>`;
+        const actionValue = action.available
+          ? `<strong>${action.messages_moved ?? 0}</strong> moved · ${action.actions_executed ?? 0} executed · ${action.actions_failed ?? 0} failed`
+          : "No move worker yet";
+        const actionReason = action.available ? "" : (action.reason || "");
 
         return `
           <div class="dashboard-account">
@@ -1669,24 +1993,23 @@
               <span class="metric-value">${escapeHtml(formatTimestamp(account.token_updated_at))}</span>
             </div>
             <div class="metric-row">
-              <span class="metric-label">Account record updated</span>
-              <span class="metric-value">${escapeHtml(formatTimestamp(account.updated_at))}</span>
-            </div>
-            <div class="metric-row">
               <span class="metric-label">Folder inventory ${folderLive}</span>
               <span class="metric-value">${folderValue}</span>
             </div>
             ${folderReason ? `<p class="metric-reason">${escapeHtml(folderReason)}</p>` : ""}
             <div class="metric-row">
-              <span class="metric-label">Email volume <span class="metric-tag pending">pending</span></span>
-              <span class="metric-value">—</span>
+              <span class="metric-label">Email volume (${windowDays}d) ${volumeTag}</span>
+              <span class="metric-value">${volumeValue}</span>
             </div>
-            <p class="metric-reason">${escapeHtml(volumeReason)}</p>
+            <p class="metric-reason">${escapeHtml(lastSync)}</p>
+            ${volumeReason ? `<p class="metric-reason">${escapeHtml(volumeReason)}</p>` : ""}
+            ${volume.available ? renderSparkline(volume.by_day, windowDays) : ""}
+            ${volume.available ? renderFolderBreakdown(volume.by_folder) : ""}
             <div class="metric-row">
-              <span class="metric-label">Processed / errors <span class="metric-tag pending">pending</span></span>
-              <span class="metric-value">—</span>
+              <span class="metric-label">Processed / errors ${actionTag}</span>
+              <span class="metric-value">${actionValue}</span>
             </div>
-            <p class="metric-reason">${escapeHtml(actionReason)}</p>
+            ${actionReason ? `<p class="metric-reason">${escapeHtml(actionReason)}</p>` : ""}
           </div>
         `;
       }
@@ -1700,19 +2023,29 @@
         totalReady.textContent = payload.totals.mailbox_ready_accounts ?? 0;
         totalFolders.textContent = payload.totals.total_folders ?? 0;
         totalDycTargets.textContent = payload.totals.dyc_target_folders ?? 0;
+        if (totalMessagesIn) totalMessagesIn.textContent = payload.totals.messages_in ?? 0;
+        if (totalMessagesPersisted) {
+          totalMessagesPersisted.textContent = payload.totals.messages_persisted ?? 0;
+        }
+        if (totalMessagesMoved) totalMessagesMoved.textContent = payload.totals.messages_moved ?? 0;
+        if (totalErrors) totalErrors.textContent = payload.totals.errors ?? 0;
 
+        const windowDays = payload.window_days || currentWindowDays;
         const entries = payload.accounts || [];
         if (!entries.length) {
           dashboardAccountList.innerHTML = `<p class="empty-state">No connected accounts yet.</p>`;
           return;
         }
-        dashboardAccountList.innerHTML = entries.map(renderDashboardAccount).join("");
+        dashboardAccountList.innerHTML = entries.map((entry) =>
+          renderDashboardAccount(entry, windowDays)
+        ).join("");
       }
 
       async function loadDashboard() {
-        const response = await fetch(`${API_BASE}/dashboard/summary`, {
-          credentials: "include"
-        });
+        const response = await fetch(
+          `${API_BASE}/dashboard/summary?window_days=${currentWindowDays}`,
+          { credentials: "include" }
+        );
         if (!response.ok) {
           dashboardAccountList.innerHTML = `<p class="empty-state">Dashboard unavailable (${response.status}).</p>`;
           return null;
@@ -1721,6 +2054,23 @@
         renderDashboard(payload);
         return payload;
       }
+
+      function setActiveWindow(windowDays) {
+        const days = Number(windowDays);
+        currentWindowDays = days || 7;
+        periodButtons.forEach((button) => {
+          button.setAttribute(
+            "aria-pressed",
+            Number(button.dataset.window) === currentWindowDays ? "true" : "false"
+          );
+        });
+        loadDashboard().catch(() => {});
+        loadActivity().catch(() => {});
+      }
+
+      periodButtons.forEach((button) => {
+        button.addEventListener("click", () => setActiveWindow(button.dataset.window));
+      });
 
       async function loadMailboxView() {
         const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
@@ -1887,6 +2237,18 @@
         });
         if (payload) renderFolders(payload.ensured_folders || []);
       });
+      if (messagesSyncButton) {
+        messagesSyncButton.addEventListener("click", async () => {
+          const payload = await safeCallApi("Messages sync", "/mail/messages/sync", {
+            method: "POST"
+          });
+          if (payload) {
+            // Refresh dashboard + activity so new tile values land immediately.
+            loadDashboard().catch(() => {});
+            loadActivity().catch(() => {});
+          }
+        });
+      }
 
       evaluateSession({ initial: true });
     </script>

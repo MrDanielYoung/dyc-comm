@@ -102,6 +102,17 @@ def cmd_inventory_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_messages_sync(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {"limit": str(args.limit)}
+    if args.folder_id:
+        params["folder_id"] = args.folder_id
+    with _client(args.api_base, args.cookie_file) as client:
+        payload = _request(client, "POST", "/mail/messages/sync", params=params)
+        _save_cookies(client, args.cookie_file)
+    _print(payload)
+    return 0
+
+
 def cmd_bootstrap(args: argparse.Namespace) -> int:
     with _client(args.api_base, args.cookie_file) as client:
         payload = _request(client, "POST", "/mail/folders/bootstrap")
@@ -168,6 +179,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     bootstrap = subparsers.add_parser("bootstrap", help="Ensure DYC folders exist")
     bootstrap.set_defaults(func=cmd_bootstrap)
+
+    messages_sync = subparsers.add_parser(
+        "messages-sync",
+        help="Sample recent messages and persist metadata as message_sighting rows",
+    )
+    messages_sync.add_argument(
+        "--folder-id",
+        default=None,
+        help="Optional Graph folder ID to scope the sync (default: all folders)",
+    )
+    messages_sync.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max messages to pull in this sync (1-200, default 50)",
+    )
+    messages_sync.set_defaults(func=cmd_messages_sync)
 
     auth_url = subparsers.add_parser("auth-url", help="Print the Microsoft auth URL from the API")
     auth_url.set_defaults(func=cmd_auth_url)
