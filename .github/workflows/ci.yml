@@ -34,32 +34,16 @@ jobs:
         id: format_check
         run: |
           set +e
-          ruff format --check --diff apps tests > /tmp/ruff-format.diff 2>&1
+          ruff format --check --diff apps tests > ruff-format.diff 2>&1
           rc=$?
-          echo "---FORMAT DIFF---"
-          head -200 /tmp/ruff-format.diff
-          echo "---END FORMAT DIFF---"
           exit $rc
 
-      - name: Post format diff comment on PR
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+      - name: Upload ruff format diff
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            let body = '### ruff format --diff\n\n```diff\n';
-            try {
-              body += fs.readFileSync('/tmp/ruff-format.diff', 'utf8').slice(0, 60000);
-            } catch (e) {
-              body += 'no diff captured';
-            }
-            body += '\n```';
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
+          name: ruff-format-diff
+          path: ruff-format.diff
 
       - name: Run tests
         run: pytest
