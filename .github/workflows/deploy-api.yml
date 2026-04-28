@@ -1,5 +1,25 @@
 name: Deploy API
 
+# Image-only deploy for the production API Container App.
+#
+# Why image-only:
+#   The previous implementation used azure/container-apps-deploy-action@v1,
+#   which under the hood invokes `az containerapp up`. That command can reset
+#   or omit runtime environment variables on the Container App, producing
+#   confusing revisions and clobbering settings owned by the
+#   Configure API Runtime workflow.
+#
+#   This workflow now does two narrow things:
+#     1. Build and push the API image to ACR via `az acr build`
+#        (server-side build, OIDC-authenticated, no registry creds needed).
+#     2. Update ONLY the container image on the existing Container App via
+#        `az containerapp update --image`. This creates a new revision that
+#        inherits the existing runtime env vars rather than replacing them.
+#
+#   Runtime environment variables (DATABASE_URL, Microsoft Entra config,
+#   ALLOWED_* allow-lists, etc.) are owned exclusively by
+#   .github/workflows/configure-api-runtime.yml and must not be set here.
+
 on:
   workflow_dispatch:
   push:
@@ -21,7 +41,9 @@ env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-api
   REGISTRY_URL: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
-  IMAGE_NAME: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io/dyc-comm-api:${{ github.sha }}
+  REGISTRY_NAME: dyccommprodacr-fmf6dchxeca3bsbf
+  IMAGE_REPOSITORY: dyc-comm-api
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   deploy:
@@ -38,15 +60,39 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and deploy api container app
-        uses: azure/container-apps-deploy-action@v1
+      - name: Build and push API image to ACR
+        # Server-side build via ACR Tasks. Uses the OIDC-authenticated
+        # Azure CLI session, so no REGISTRY_USERNAME / REGISTRY_PASSWORD
+        # secrets are required. The federated identity must hold AcrPush
+        # on the registry.
+        uses: azure/cli@v2
         with:
-          appSourcePath: ${{ github.workspace }}/apps/api
-          dockerfilePath: Dockerfile
-          registryUrl: ${{ env.REGISTRY_URL }}
-          registryUsername: ${{ secrets.REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
-          imageToBuild: ${{ env.IMAGE_NAME }}
-          resourceGroup: ${{ env.RESOURCE_GROUP }}
-          containerAppName: ${{ env.CONTAINER_APP_NAME }}
-          disableTelemetry: true
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            az acr build \
+              --registry "$REGISTRY_NAME" \
+              --image "$IMAGE_REPOSITORY:$IMAGE_TAG" \
+              --file apps/api/Dockerfile \
+              apps/api \
+              --output none
+
+      - name: Update Container App image only (preserves runtime env)
+        # IMPORTANT: only `--image` is set here. Runtime environment
+        # variables on the Container App are owned by the
+        # Configure API Runtime workflow and must not be touched from
+        # this deploy. `az containerapp update --image` creates a new
+        # revision that inherits the existing env var set.
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            FULL_IMAGE="${REGISTRY_URL}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+            echo "Deploying image: ${FULL_IMAGE}"
+            az containerapp update \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "$FULL_IMAGE" \
+              --output none
+            echo "Container App image updated; runtime env vars left untouched."
