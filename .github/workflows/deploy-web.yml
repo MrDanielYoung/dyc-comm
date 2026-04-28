@@ -1,5 +1,29 @@
 name: Deploy Web
 
+# Image-only deploy for the production web Container App.
+#
+# Why image-only:
+#   The previous implementation used azure/container-apps-deploy-action@v1,
+#   which under the hood invokes `az containerapp up`. That command can
+#   silently leave the Container App's revision template referencing the
+#   prior image even after a fresh build+push, so workflow runs report
+#   success while https://comm.danielyoung.io continues to serve stale
+#   content (observed after #44 removed the "Private app" subtitle and
+#   after #41 added Inbox Sorting strings).
+#
+#   This workflow now does three narrow things:
+#     1. Build and push the web image to ACR via `docker login` + `docker
+#        build` + `docker push`, using the REGISTRY_USERNAME /
+#        REGISTRY_PASSWORD secrets the API deploy uses. Keeps the build
+#        path identical to deploy-api.yml and avoids ACR Tasks RBAC.
+#     2. Update ONLY the container image on the existing Container App via
+#        `az containerapp update --image`. This deterministically creates
+#        a new revision pinned to the SHA-tagged image we just pushed.
+#     3. Verify the active revision now references the SHA-tagged image
+#        and that the served HTML is reachable. The active-revision check
+#        is the durable signal that catches the silent stale-revision
+#        failure mode that motivated this rewrite.
+
 on:
   workflow_dispatch:
   push:
@@ -21,7 +45,8 @@ env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-web
   REGISTRY_URL: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
-  IMAGE_NAME: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io/dyc-comm-web:${{ github.sha }}
+  IMAGE_REPOSITORY: dyc-comm-web
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
   deploy:
@@ -38,15 +63,75 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and deploy web container app
-        uses: azure/container-apps-deploy-action@v1
+      - name: Log in to ACR with registry credentials
+        uses: docker/login-action@v3
         with:
-          appSourcePath: ${{ github.workspace }}/apps/web
-          dockerfilePath: Dockerfile
-          registryUrl: ${{ env.REGISTRY_URL }}
-          registryUsername: ${{ secrets.REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
-          imageToBuild: ${{ env.IMAGE_NAME }}
-          resourceGroup: ${{ env.RESOURCE_GROUP }}
-          containerAppName: ${{ env.CONTAINER_APP_NAME }}
-          disableTelemetry: true
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push web image
+        run: |
+          set -euo pipefail
+          FULL_IMAGE="${REGISTRY_URL}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "${FULL_IMAGE}" \
+            apps/web
+          docker push "${FULL_IMAGE}"
+
+      - name: Update Container App image only
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            FULL_IMAGE="${{ env.REGISTRY_URL }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+            echo "Deploying image: ${FULL_IMAGE}"
+            az containerapp update \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "${FULL_IMAGE}" \
+              --output none
+            echo "Container App image updated."
+
+      - name: Verify active revision serves new image
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            FULL_IMAGE="${{ env.REGISTRY_URL }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+            FQDN=$(az containerapp show \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query properties.configuration.ingress.fqdn -o tsv)
+            echo "Container App FQDN: ${FQDN}"
+
+            # Confirm the Container App's template now references the
+            # SHA tag we just pushed. This is the durable check that
+            # catches the silent stale-revision failure mode.
+            CURRENT_IMAGE=$(az containerapp show \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query "properties.template.containers[0].image" \
+              -o tsv)
+            echo "Container App template image = ${CURRENT_IMAGE}"
+            if [ "${CURRENT_IMAGE}" != "${FULL_IMAGE}" ]; then
+              echo "ERROR: Container App template references ${CURRENT_IMAGE}, expected ${FULL_IMAGE}" >&2
+              exit 1
+            fi
+
+            # Smoke-test the FQDN is reachable. Retry to allow the new
+            # revision to start receiving traffic.
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              BODY=$(curl -fsSL "https://${FQDN}/" || true)
+              if echo "${BODY}" | grep -q "<title>DYC Comm</title>"; then
+                echo "Live site reachable on attempt ${attempt}."
+                exit 0
+              fi
+              echo "attempt ${attempt}: live site not yet responding with expected title; sleeping"
+              sleep 10
+            done
+            echo "ERROR: live site at https://${FQDN}/ did not respond with expected title after deploy" >&2
+            exit 1
