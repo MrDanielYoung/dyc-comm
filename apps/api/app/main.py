@@ -1426,15 +1426,13 @@ def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, An
 
     events: list[dict[str, Any]] = []
     for row in rows:
-        (
-            provider_folder_id,
-            display_name,
-            canonical_name,
-            ownership,
-            is_dyc_target,
-            created_at,
-            updated_at,
-        ) = row
+        provider_folder_id = row[0]
+        display_name = row[1]
+        canonical_name = row[2]
+        ownership = row[3]
+        is_dyc_target = row[4]
+        created_at = row[5]
+        updated_at = row[6]
         is_initial = (
             updated_at is None
             or created_at is None
