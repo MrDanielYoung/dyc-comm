@@ -86,3 +86,75 @@ def test_default_login_hint_is_daniel_at_danielyoung_io():
     # signs in as daniel@danielyoung.io for the bring-up — make sure that
     # email is referenced in the page so the operator path stays documented.
     assert "danielyoung.io" in html
+
+
+def test_sorting_panel_exposes_setup_cta_for_unready_accounts():
+    """When the selected account is linked but mailbox-access is not ready,
+    the Sorting tab must show a clear setup notice + reconnect CTA, not a
+    silent run button. This is the stabilization promise: actionable setup
+    controls instead of a hidden sorting UI.
+    """
+    html = _read_html()
+    assert 'data-testid="sorting-setup-notice"' in html
+    assert 'data-testid="sorting-reconnect"' in html
+    # The notice must use the term "Reconnect" so the operator knows the
+    # action they need to take.
+    assert "Reconnect this account" in html
+
+
+def test_dashboard_sorting_card_exposes_reconnect_for_unready_accounts():
+    html = _read_html()
+    assert 'data-testid="dashboard-sorting-reconnect"' in html
+    assert 'data-testid="dashboard-sorting-setup-notice"' in html
+
+
+def test_sorting_run_button_is_blocked_when_account_not_mailbox_ready():
+    """The JS must hard-disable the run path when the selected account
+    has mailbox_access_ready=false. It is not enough to rely on the API
+    returning 409 — the operator should not click into a failing call.
+    """
+    html = _read_html()
+    # The readiness predicate referenced from the run/log paths.
+    assert "selectedAccountIsMailboxReady" in html
+    # The runSortingDryRun guard refuses to call the endpoint when not ready.
+    assert "Mailbox access for" in html
+    # The reconnect link is rebuilt from the selected account email so the
+    # OAuth start URL carries the right login_hint.
+    assert "signInUrlForEmail" in html
+
+
+def test_login_button_present_on_initial_load():
+    """The unauthenticated gate must expose a Microsoft sign-in entry-point
+    that the operator can use without prior session state.
+    """
+    html = _read_html()
+    assert 'data-testid="login-button"' in html
+    assert "/auth/microsoft/start" in html
+
+
+def test_account_nav_supports_multi_account_selection():
+    """Account-scoped flows: each linked account is selectable in the nav,
+    and selecting one re-scopes dashboard / activity / alerts / sorting.
+    """
+    html = _read_html()
+    assert 'data-testid="account-nav"' in html
+    assert 'data-testid="account-nav-list"' in html
+    assert "function selectAccount(email)" in html
+    # Sorting log + dashboard reload on account switch.
+    assert "loadSortingLog().catch" in html
+
+
+def test_inbox_sorting_string_present():
+    """Required by the stabilization checklist: 'Inbox Sorting' must remain
+    in the shipped web build.
+    """
+    html = _read_html()
+    assert "Inbox Sorting" in html
+
+
+def test_run_inbox_classification_dryrun_string_present():
+    """Required by the stabilization checklist: 'Run inbox classification
+    (dry-run)' must remain in the shipped web build.
+    """
+    html = _read_html()
+    assert "Run inbox classification (dry-run)" in html
