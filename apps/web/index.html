@@ -550,40 +550,163 @@
         font-weight: 500;
       }
 
-      .gate {
-        display: grid;
-        gap: 18px;
-        padding: 36px 28px;
-        text-align: center;
-        align-items: center;
-        justify-items: center;
+      body.is-login {
+        background: #f2f2f2;
       }
 
-      .gate-icon {
-        width: 56px;
-        height: 56px;
-        border-radius: 14px;
+      body.is-login main {
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        min-height: 100vh;
         display: grid;
         place-items: center;
-        background: rgba(74, 131, 197, 0.12);
-        color: var(--accent-deep);
-        font-size: 1.6rem;
       }
 
-      .gate h1 {
-        max-width: 22ch;
+      body.is-login .shell {
+        gap: 0;
+        width: 100%;
+        display: grid;
+        place-items: center;
       }
 
-      .gate-copy {
-        margin: 0;
-        max-width: 48ch;
-        color: var(--muted);
+      .login-card {
+        width: 100%;
+        max-width: 440px;
+        margin: 24px auto;
+        padding: 44px 44px 36px;
+        background: #ffffff;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+        border-radius: 2px;
+        text-align: left;
+        font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+        color: #1b1b1b;
+      }
+
+      .login-logo {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .login-logo-mark {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-rows: 1fr 1fr;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+
+      .login-logo-mark span {
+        display: block;
+      }
+
+      .login-logo-mark span:nth-child(1) { background: #f25022; }
+      .login-logo-mark span:nth-child(2) { background: #7fba00; }
+      .login-logo-mark span:nth-child(3) { background: #00a4ef; }
+      .login-logo-mark span:nth-child(4) { background: #ffb900; }
+
+      .login-logo-text {
         font-size: 0.95rem;
-        line-height: 1.5;
+        font-weight: 600;
+        color: #5e5e5e;
+        letter-spacing: 0;
       }
 
-      .gate .action-row {
+      .login-title {
+        margin: 24px 0 12px;
+        font-size: 1.5rem;
+        font-weight: 600;
+        line-height: 1.25;
+        color: #1b1b1b;
+        letter-spacing: -0.005em;
+      }
+
+      .login-subtitle {
+        margin: 0 0 28px;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        color: #5e5e5e;
+      }
+
+      .login-button {
+        display: inline-flex;
+        align-items: center;
         justify-content: center;
+        width: 100%;
+        min-height: 44px;
+        padding: 10px 16px;
+        background: #0067b8;
+        color: #ffffff;
+        border: 1px solid #0067b8;
+        border-radius: 2px;
+        font-family: inherit;
+        font-size: 0.95rem;
+        font-weight: 600;
+        text-decoration: none;
+        cursor: pointer;
+        transition: background-color 120ms ease, border-color 120ms ease;
+      }
+
+      .login-button:hover {
+        background: #005da6;
+        border-color: #005da6;
+        transform: none;
+      }
+
+      .login-button:active {
+        background: #004f8c;
+        transform: none;
+      }
+
+      .login-button:focus-visible {
+        outline: 2px solid #1b1b1b;
+        outline-offset: 2px;
+      }
+
+      .login-secondary {
+        margin-top: 12px;
+        background: transparent;
+        color: #0067b8;
+        border-color: transparent;
+        font-weight: 600;
+      }
+
+      .login-secondary:hover {
+        background: rgba(0, 103, 184, 0.06);
+        border-color: transparent;
+        color: #005da6;
+      }
+
+      .login-notice {
+        margin: 16px 0 0;
+        padding: 10px 12px;
+        border-left: 4px solid #d83b01;
+        background: #fde7e9;
+        color: #1b1b1b;
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+
+      .login-status {
+        margin: 16px 0 0;
+        font-size: 0.82rem;
+        color: #5e5e5e;
+        line-height: 1.4;
+      }
+
+      @media (max-width: 480px) {
+        .login-card {
+          margin: 0;
+          padding: 32px 24px 28px;
+          border: none;
+          box-shadow: none;
+          min-height: 100vh;
+        }
       }
 
       .dashboard-panel {
@@ -882,10 +1005,10 @@
       }
     </style>
   </head>
-  <body>
+  <body class="is-login">
     <main>
       <div class="shell">
-        <header class="topbar" data-testid="app-header">
+        <header class="topbar" id="appHeader" data-testid="app-header" hidden>
           <div class="brand">
             <img class="brand-wordmark" src="/assets/dy-wordmark.png?v=20260426b" alt="Daniel Young">
           </div>
@@ -911,19 +1034,35 @@
           </div>
         </header>
 
-        <section class="panel gate" id="gateView" aria-live="polite">
-          <div class="gate-icon" aria-hidden="true">&#x1F512;</div>
-          <span class="status-chip locked" id="gateChip">Sign-in required</span>
-          <h1 id="gateTitle">Sign in to continue</h1>
-          <p class="gate-copy" id="gateCopy">
-            This console is private. Sign in with the authorized Microsoft 365 account
-            to view mailbox status and run mailbox operations.
-          </p>
-          <div class="action-row">
-            <a class="button-link primary" id="gateConnectLink" href="#">Sign in with Microsoft</a>
-            <button class="secondary" id="gateRetryButton" type="button">Retry session check</button>
+        <section
+          class="login-card"
+          id="gateView"
+          data-testid="login-card"
+          aria-live="polite"
+          aria-labelledby="gateTitle"
+        >
+          <div class="login-logo" aria-hidden="true">
+            <span class="login-logo-mark">
+              <span></span><span></span><span></span><span></span>
+            </span>
+            <span class="login-logo-text">Microsoft</span>
           </div>
-          <p class="notice" id="gateNotice" hidden></p>
+          <h1 class="login-title" id="gateTitle">Sign in</h1>
+          <p class="login-subtitle" id="gateCopy">Private app — authorized account only.</p>
+          <a
+            class="login-button"
+            id="gateConnectLink"
+            data-testid="login-button"
+            href="#"
+          >Sign in with Microsoft</a>
+          <button
+            class="login-button login-secondary"
+            id="gateRetryButton"
+            data-testid="login-retry"
+            type="button"
+          >Retry session check</button>
+          <p class="login-status" id="gateChip" data-testid="login-status">Sign-in required</p>
+          <p class="login-notice" id="gateNotice" data-testid="login-notice" hidden></p>
         </section>
 
         <div id="appView" hidden>
@@ -1243,6 +1382,7 @@
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
 
+      const appHeader = document.getElementById("appHeader");
       const gateView = document.getElementById("gateView");
       const gateChip = document.getElementById("gateChip");
       const gateTitle = document.getElementById("gateTitle");
@@ -1317,20 +1457,20 @@
         headerAccount.hidden = false;
       }
 
-      function showGate({ chip, chipClass, title, copy, notice, noticeIsError }) {
+      function showGate({ chip, title, copy, notice }) {
         appView.hidden = true;
         gateView.hidden = false;
+        appHeader.hidden = true;
+        document.body.classList.add("is-login");
         setHeaderUnauthenticated();
         if (chip) {
           gateChip.textContent = chip;
-          gateChip.className = `status-chip ${chipClass || "locked"}`;
         }
         if (title) gateTitle.textContent = title;
         if (copy) gateCopy.textContent = copy;
         if (notice) {
           gateNotice.textContent = notice;
           gateNotice.hidden = false;
-          gateNotice.className = `notice ${noticeIsError ? "error" : ""}`.trim();
         } else {
           gateNotice.hidden = true;
           gateNotice.textContent = "";
@@ -1343,6 +1483,8 @@
       function showApp(account) {
         gateView.hidden = true;
         appView.hidden = false;
+        appHeader.hidden = false;
+        document.body.classList.remove("is-login");
         setHeaderAuthenticated(account);
       }
 
@@ -1733,10 +1875,9 @@
       async function evaluateSession({ initial }) {
         if (initial) {
           showGate({
-            chip: "Checking session",
-            chipClass: "idle",
-            title: "Checking your session…",
-            copy: "Verifying your Microsoft 365 sign-in with the API."
+            chip: "Checking session…",
+            title: "Sign in",
+            copy: "Private app — authorized account only."
           });
         }
 
@@ -1746,11 +1887,9 @@
         } catch (error) {
           showGate({
             chip: "API unreachable",
-            chipClass: "error",
-            title: "Cannot reach the API",
-            copy: "The console could not contact the backend to verify your session.",
-            notice: `API request failed: ${error.message}`,
-            noticeIsError: true
+            title: "Sign in",
+            copy: "Private app — authorized account only.",
+            notice: `API request failed: ${error.message}`
           });
           return;
         }
@@ -1759,9 +1898,8 @@
         if (!account) {
           showGate({
             chip: "Sign-in required",
-            chipClass: "locked",
-            title: "Sign in to continue",
-            copy: "This console is private. Sign in with the authorized Microsoft 365 account to view mailbox status and run mailbox operations."
+            title: "Sign in",
+            copy: "Private app — authorized account only."
           });
           return;
         }
@@ -1769,9 +1907,8 @@
         if (!payload.mailbox_access_ready) {
           showGate({
             chip: "Re-authentication required",
-            chipClass: "locked",
-            title: "Mailbox access not ready",
-            copy: "Your Microsoft account is linked, but the mailbox token is missing or expired. Sign in again to refresh access.",
+            title: "Sign in",
+            copy: "Mailbox access expired — sign in again to continue.",
             notice: `Linked account: ${account.email}`
           });
           return;
@@ -1826,9 +1963,8 @@
         }
         showGate({
           chip: "Signed out",
-          chipClass: "locked",
-          title: "You have been signed out",
-          copy: "Sign in again with the authorized Microsoft 365 account to continue."
+          title: "Sign in",
+          copy: "Private app — authorized account only."
         });
       }
 
@@ -1853,11 +1989,9 @@
         window.history.replaceState({}, "", url);
         showGate({
           chip: "Sign-in failed",
-          chipClass: "error",
-          title: "Microsoft sign-in failed",
-          copy: "The Microsoft authorization did not complete. Try again.",
-          notice: reason,
-          noticeIsError: true
+          title: "Sign in",
+          copy: "Microsoft sign-in did not complete. Try again.",
+          notice: reason
         });
       }
 
