@@ -1104,9 +1104,7 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, default=_default)
 
 
-def _persist_message_sightings(
-    account_id: str, messages: list[dict[str, Any]]
-) -> tuple[int, int]:
+def _persist_message_sightings(account_id: str, messages: list[dict[str, Any]]) -> tuple[int, int]:
     """Persist message metadata. Returns (seen, persisted)."""
     if not messages:
         return 0, 0
@@ -1178,9 +1176,7 @@ async def _list_recent_messages(
     limit: int,
 ) -> list[dict[str, Any]]:
     """Fetch recent message metadata from Graph for a folder (or All mail)."""
-    select = (
-        "id,parentFolderId,subject,receivedDateTime,isRead,hasAttachments,sentDateTime"
-    )
+    select = "id,parentFolderId,subject,receivedDateTime,isRead,hasAttachments,sentDateTime"
     params: dict[str, Any] = {
         "$select": select,
         "$top": str(limit),
@@ -2032,9 +2028,7 @@ def dashboard_summary(
         "dyc_target_folders": sum(
             entry["folder_inventory"].get("dyc_target_folders") or 0 for entry in per_account
         ),
-        "messages_in": sum(
-            entry["email_volume"].get("messages_in") or 0 for entry in per_account
-        ),
+        "messages_in": sum(entry["email_volume"].get("messages_in") or 0 for entry in per_account),
         "messages_persisted": sum(
             entry["email_volume"].get("messages_persisted") or 0 for entry in per_account
         ),
