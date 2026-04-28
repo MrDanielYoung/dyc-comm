@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import os
 import secrets
 import uuid
@@ -454,6 +455,107 @@ def _ensure_account_tables() -> None:
                 ON mailbox_folder(account_id)
                 """
             )
+            # sync_event records a single invocation of a sync/bootstrap op so
+            # the dashboard can show "last sync at", recent errors, and a feed
+            # of real activity events. Operations covered today:
+            #   folder.bootstrap, folder.inventory.sync, messages.sync.
+            # Counts are operation-specific; columns are kept as nullable
+            # integers so future ops can opt in without a migration.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_event (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    operation TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    folders_seen INTEGER,
+                    messages_seen INTEGER,
+                    messages_persisted INTEGER,
+                    messages_moved INTEGER,
+                    errors INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    completed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sync_event_account_time
+                ON sync_event(account_id, completed_at DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sync_event_operation_time
+                ON sync_event(operation, completed_at DESC)
+                """
+            )
+            # message_sighting records a per-message observation made by the
+            # Graph message-sync endpoint. We persist metadata only — never
+            # the body. Subject is truncated to 120 chars to limit storage and
+            # exposure of sensitive content; see docs/dashboard-instrumentation.md.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS message_sighting (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    provider_message_id TEXT NOT NULL,
+                    folder_provider_id TEXT,
+                    folder_display_name TEXT,
+                    subject_preview TEXT,
+                    received_at TIMESTAMPTZ,
+                    is_unread BOOLEAN,
+                    has_attachments BOOLEAN,
+                    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(account_id, provider_message_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_message_sighting_account_received
+                ON message_sighting(account_id, received_at DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_message_sighting_account_seen
+                ON message_sighting(account_id, first_seen_at DESC)
+                """
+            )
+            # mailbox_action_event is the instrumentation seam for the not-yet
+            # built move worker. It is created so that the dashboard "moved"
+            # counters can read from a stable table; today the table stays
+            # empty because nothing writes to it. Do not start populating
+            # this table from speculative paths — only the real action worker
+            # should write here.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mailbox_action_event (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    provider_message_id TEXT,
+                    action_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    source_folder TEXT,
+                    target_folder TEXT,
+                    error_message TEXT,
+                    occurred_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_mailbox_action_event_account_time
+                ON mailbox_action_event(account_id, occurred_at DESC)
+                """
+            )
         connection.commit()
 
     _DB_BOOTSTRAPPED = True
@@ -890,6 +992,205 @@ def _load_folder_inventory(account_id: str) -> list[dict[str, Any]]:
     ]
 
 
+SUBJECT_PREVIEW_MAX_CHARS = 120
+
+# Cap how many messages /mail/messages/sync pulls per Graph call. Keep it
+# bounded so a single sync stays well under the API's request budget; the
+# endpoint can be re-run for backfill.
+MESSAGE_SYNC_DEFAULT_LIMIT = 50
+MESSAGE_SYNC_MAX_LIMIT = 200
+
+
+def _truncate_subject(subject: str | None) -> str | None:
+    if subject is None:
+        return None
+    cleaned = str(subject).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) <= SUBJECT_PREVIEW_MAX_CHARS:
+        return cleaned
+    return cleaned[: SUBJECT_PREVIEW_MAX_CHARS - 1].rstrip() + "…"
+
+
+def _parse_graph_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        # Graph uses ISO-8601 with a "Z" suffix for UTC.
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _record_sync_event(
+    account_id: str,
+    operation: str,
+    *,
+    status: str,
+    started_at: datetime,
+    folders_seen: int | None = None,
+    messages_seen: int | None = None,
+    messages_persisted: int | None = None,
+    messages_moved: int | None = None,
+    errors: int = 0,
+    error_message: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Persist a sync_event row. No-op when DATABASE_URL is unset.
+
+    Failures to record are swallowed: instrumentation must never break the
+    operation it is observing.
+    """
+    if not _database_url():
+        return
+    try:
+        _ensure_account_tables()
+    except Exception:
+        return
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO sync_event (
+                        id,
+                        account_id,
+                        operation,
+                        status,
+                        folders_seen,
+                        messages_seen,
+                        messages_persisted,
+                        messages_moved,
+                        errors,
+                        error_message,
+                        detail,
+                        started_at,
+                        completed_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, now()
+                    )
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        account_id,
+                        operation,
+                        status,
+                        folders_seen,
+                        messages_seen,
+                        messages_persisted,
+                        messages_moved,
+                        errors,
+                        error_message,
+                        _json_dumps(detail or {}),
+                        started_at,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error:
+        return
+
+
+def _json_dumps(value: Any) -> str:
+    def _default(obj: Any) -> str:
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return str(obj)
+
+    return json.dumps(value, default=_default)
+
+
+def _persist_message_sightings(
+    account_id: str, messages: list[dict[str, Any]]
+) -> tuple[int, int]:
+    """Persist message metadata. Returns (seen, persisted)."""
+    if not messages:
+        return (0, 0)
+    if not _database_url():
+        return (len(messages), 0)
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    persisted = 0
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                for message in messages:
+                    provider_message_id = message.get("id")
+                    if not provider_message_id:
+                        continue
+                    received_at = _parse_graph_datetime(message.get("receivedDateTime"))
+                    cursor.execute(
+                        """
+                        INSERT INTO message_sighting (
+                            id,
+                            account_id,
+                            provider_message_id,
+                            folder_provider_id,
+                            folder_display_name,
+                            subject_preview,
+                            received_at,
+                            is_unread,
+                            has_attachments,
+                            first_seen_at,
+                            last_seen_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+                        ON CONFLICT (account_id, provider_message_id) DO UPDATE
+                        SET folder_provider_id = EXCLUDED.folder_provider_id,
+                            folder_display_name = EXCLUDED.folder_display_name,
+                            subject_preview = EXCLUDED.subject_preview,
+                            received_at = EXCLUDED.received_at,
+                            is_unread = EXCLUDED.is_unread,
+                            has_attachments = EXCLUDED.has_attachments,
+                            last_seen_at = now()
+                        """,
+                        (
+                            str(uuid.uuid4()),
+                            account_id,
+                            provider_message_id,
+                            message.get("parentFolderId"),
+                            message.get("_folder_display_name"),
+                            _truncate_subject(message.get("subject")),
+                            received_at,
+                            bool(message.get("isRead") is False),
+                            bool(message.get("hasAttachments")),
+                        ),
+                    )
+                    persisted += 1
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist message sightings to PostgreSQL.",
+        ) from exc
+
+    return (len(messages), persisted)
+
+
+async def _list_recent_messages(
+    access_token: str,
+    folder_id: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch recent message metadata from Graph for a folder (or All mail)."""
+    select = (
+        "id,parentFolderId,subject,receivedDateTime,isRead,hasAttachments,sentDateTime"
+    )
+    params: dict[str, Any] = {
+        "$select": select,
+        "$top": str(limit),
+        "$orderby": "receivedDateTime desc",
+    }
+    path = f"/me/mailFolders/{folder_id}/messages" if folder_id else "/me/messages"
+    payload = await _graph_get(access_token, path, params=params)
+    return payload.get("value", [])
+
+
 async def _ensure_default_mail_folders(access_token: str) -> list[dict[str, Any]]:
     existing_folders = await _list_mail_folders(access_token, include_hidden=False)
     existing_by_name = {
@@ -1058,8 +1359,27 @@ async def bootstrap_mail_folders(
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
     access_token, account = await _graph_access_token_for_email(linked_email)
-    folders = _annotate_folders(await _ensure_default_mail_folders(access_token))
-    _persist_folder_inventory(account["account_id"], folders)
+    started_at = _utcnow()
+    try:
+        folders = _annotate_folders(await _ensure_default_mail_folders(access_token))
+        _persist_folder_inventory(account["account_id"], folders)
+    except HTTPException as exc:
+        _record_sync_event(
+            account["account_id"],
+            "folder.bootstrap",
+            status="error",
+            started_at=started_at,
+            errors=1,
+            error_message=str(exc.detail),
+        )
+        raise
+    _record_sync_event(
+        account["account_id"],
+        "folder.bootstrap",
+        status="success",
+        started_at=started_at,
+        folders_seen=len(folders),
+    )
     return {
         "account": {
             "email": account["email"],
@@ -1078,16 +1398,111 @@ async def sync_mail_folder_inventory(
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
     access_token, account = await _graph_access_token_for_email(linked_email)
-    folders = _annotate_folders(
-        await _list_mail_folders(access_token, include_hidden=include_hidden)
+    started_at = _utcnow()
+    try:
+        folders = _annotate_folders(
+            await _list_mail_folders(access_token, include_hidden=include_hidden)
+        )
+        _persist_folder_inventory(account["account_id"], folders)
+    except HTTPException as exc:
+        _record_sync_event(
+            account["account_id"],
+            "folder.inventory.sync",
+            status="error",
+            started_at=started_at,
+            errors=1,
+            error_message=str(exc.detail),
+        )
+        raise
+    _record_sync_event(
+        account["account_id"],
+        "folder.inventory.sync",
+        status="success",
+        started_at=started_at,
+        folders_seen=len(folders),
     )
-    _persist_folder_inventory(account["account_id"], folders)
     return {
         "account": {
             "email": account["email"],
             "display_name": account["display_name"],
         },
         "folders": folders,
+    }
+
+
+@app.post("/mail/messages/sync")
+async def sync_mail_messages(
+    folder_id: str | None = Query(default=None),
+    limit: int = Query(default=MESSAGE_SYNC_DEFAULT_LIMIT, ge=1, le=MESSAGE_SYNC_MAX_LIMIT),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Sample recent messages from Graph and persist metadata only.
+
+    Pulls the most recently received messages for the linked account. By
+    default scans across all folders (Graph's `/me/messages`); pass
+    `folder_id` to scope the pull. Bodies are never fetched or stored;
+    subjects are truncated. The endpoint records a sync_event regardless of
+    success/failure so the operations dashboard reflects the call.
+    """
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    access_token, account = await _graph_access_token_for_email(linked_email)
+    started_at = _utcnow()
+    folder_display_name: str | None = None
+    if folder_id:
+        # Best-effort folder name lookup so sightings can carry a friendly
+        # label without an extra Graph round-trip per message.
+        try:
+            folder = await _graph_get(access_token, f"/me/mailFolders/{folder_id}")
+            folder_display_name = folder.get("displayName")
+        except HTTPException:
+            folder_display_name = None
+
+    try:
+        messages = await _list_recent_messages(access_token, folder_id, limit)
+        if folder_display_name:
+            for message in messages:
+                message["_folder_display_name"] = folder_display_name
+        seen, persisted = _persist_message_sightings(account["account_id"], messages)
+    except HTTPException as exc:
+        _record_sync_event(
+            account["account_id"],
+            "messages.sync",
+            status="error",
+            started_at=started_at,
+            errors=1,
+            error_message=str(exc.detail),
+            detail={"folder_id": folder_id, "limit": limit},
+        )
+        raise
+
+    _record_sync_event(
+        account["account_id"],
+        "messages.sync",
+        status="success",
+        started_at=started_at,
+        messages_seen=seen,
+        messages_persisted=persisted,
+        detail={
+            "folder_id": folder_id,
+            "folder_display_name": folder_display_name,
+            "limit": limit,
+        },
+    )
+
+    return {
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "scope": {
+            "folder_id": folder_id,
+            "folder_display_name": folder_display_name,
+            "limit": limit,
+        },
+        "messages_seen": seen,
+        "messages_persisted": persisted,
     }
 
 
@@ -1121,13 +1536,297 @@ async def mail_folder_inventory(
 # See docs/dashboard-instrumentation.md for the next instrumentation slice.
 
 PENDING_REASON_INGESTION = (
-    "Email ingestion is not yet implemented; no email_message rows are written. "
-    "Next step: connector worker that persists message metadata and timestamps."
+    "No message sightings have been persisted yet. Run POST /mail/messages/sync "
+    "(or use the Sync messages action in API/Diagnostics) to start populating "
+    "message_sighting rows for this account."
 )
 PENDING_REASON_ACTIONS = (
-    "Mailbox actions are not yet logged; mailbox_action and audit_event tables "
-    "are defined in schema.md but not populated by the API/connector path."
+    "Automated message movement is not yet implemented. The mailbox_action_event "
+    "table exists for instrumentation, but no worker writes to it; counts here "
+    "will stay zero until the move worker lands."
 )
+DEFAULT_DASHBOARD_WINDOW_DAYS = 7
+SUPPORTED_DASHBOARD_WINDOW_DAYS = (1, 7, 30)
+
+
+def _normalize_window_days(window_days: int | None) -> int:
+    """Clamp the dashboard window to the supported set.
+
+    The dashboard offers 24h / 7d / 30d. Anything else is coerced into the
+    nearest supported bucket so callers can pass a free-form integer without
+    surprising results.
+    """
+    if not window_days or window_days <= 0:
+        return DEFAULT_DASHBOARD_WINDOW_DAYS
+    if window_days <= 1:
+        return 1
+    if window_days <= 7:
+        return 7
+    return 30
+
+
+def _empty_volume_metrics(window_days: int = DEFAULT_DASHBOARD_WINDOW_DAYS) -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": PENDING_REASON_INGESTION,
+        "window_days": window_days,
+        "messages_in": 0,
+        "messages_persisted": 0,
+        "errors": 0,
+        "last_message_received_at": None,
+        "last_sync_at": None,
+        "last_sync_status": None,
+        "last_sync_error": None,
+        "by_day": [],
+        "by_folder": [],
+    }
+
+
+def _empty_action_metrics(window_days: int = DEFAULT_DASHBOARD_WINDOW_DAYS) -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": PENDING_REASON_ACTIONS,
+        "window_days": window_days,
+        "actions_recommended": 0,
+        "actions_executed": 0,
+        "actions_failed": 0,
+        "messages_moved": 0,
+        "last_action_at": None,
+    }
+
+
+def _load_volume_metrics(account_id: str, window_days: int) -> dict[str, Any]:
+    """Compute message-volume metrics from real persisted rows.
+
+    Returns the same shape as `_empty_volume_metrics` but with `available`
+    flipped to True when there is at least one sync event or sighting in the
+    window. We surface even an empty-but-recently-synced state as available
+    so the dashboard can distinguish "no instrumentation" from "synced, no
+    new messages".
+    """
+    if not _database_url():
+        return _empty_volume_metrics(window_days)
+    try:
+        _ensure_account_tables()
+    except Exception:
+        return _empty_volume_metrics(window_days)
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT count(*),
+                           max(received_at),
+                           max(first_seen_at)
+                    FROM message_sighting
+                    WHERE account_id = %s
+                      AND received_at >= now() - make_interval(days => %s)
+                    """,
+                    (account_id, window_days),
+                )
+                count_row = cursor.fetchone()
+                messages_in = int(count_row[0] or 0)
+                last_received = count_row[1]
+                last_seen = count_row[2]
+
+                cursor.execute(
+                    """
+                    SELECT count(*) FROM message_sighting WHERE account_id = %s
+                    """,
+                    (account_id,),
+                )
+                total_persisted = int((cursor.fetchone() or [0])[0])
+
+                cursor.execute(
+                    """
+                    SELECT to_char(date_trunc('day', received_at), 'YYYY-MM-DD') AS day,
+                           count(*)
+                    FROM message_sighting
+                    WHERE account_id = %s
+                      AND received_at >= now() - make_interval(days => %s)
+                    GROUP BY 1
+                    ORDER BY 1 ASC
+                    """,
+                    (account_id, window_days),
+                )
+                by_day = [
+                    {"day": row[0], "messages_in": int(row[1])}
+                    for row in cursor.fetchall()
+                    if row[0] is not None
+                ]
+
+                cursor.execute(
+                    """
+                    SELECT
+                        COALESCE(folder_display_name, folder_provider_id, '(unknown)'),
+                        count(*)
+                    FROM message_sighting
+                    WHERE account_id = %s
+                      AND received_at >= now() - make_interval(days => %s)
+                    GROUP BY 1
+                    ORDER BY 2 DESC
+                    LIMIT 12
+                    """,
+                    (account_id, window_days),
+                )
+                by_folder = [
+                    {"folder": row[0], "messages_in": int(row[1])}
+                    for row in cursor.fetchall()
+                ]
+
+                cursor.execute(
+                    """
+                    SELECT completed_at, status, error_message,
+                           messages_seen, messages_persisted
+                    FROM sync_event
+                    WHERE account_id = %s AND operation = 'messages.sync'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """,
+                    (account_id,),
+                )
+                last_sync_row = cursor.fetchone()
+
+                cursor.execute(
+                    """
+                    SELECT count(*)
+                    FROM sync_event
+                    WHERE account_id = %s
+                      AND operation = 'messages.sync'
+                      AND status = 'error'
+                      AND completed_at >= now() - make_interval(days => %s)
+                    """,
+                    (account_id, window_days),
+                )
+                error_count = int((cursor.fetchone() or [0])[0])
+    except psycopg.Error:
+        return _empty_volume_metrics(window_days)
+
+    last_sync_at = last_sync_row[0].isoformat() if last_sync_row and last_sync_row[0] else None
+    last_sync_status = last_sync_row[1] if last_sync_row else None
+    last_sync_error = last_sync_row[2] if last_sync_row else None
+
+    available = bool(total_persisted) or bool(last_sync_at)
+
+    return {
+        "available": available,
+        "reason": None if available else PENDING_REASON_INGESTION,
+        "window_days": window_days,
+        "messages_in": messages_in,
+        "messages_persisted": total_persisted,
+        "errors": error_count,
+        "last_message_received_at": last_received.isoformat() if last_received else None,
+        "last_message_seen_at": last_seen.isoformat() if last_seen else None,
+        "last_sync_at": last_sync_at,
+        "last_sync_status": last_sync_status,
+        "last_sync_error": last_sync_error,
+        "by_day": by_day,
+        "by_folder": by_folder,
+    }
+
+
+def _load_action_metrics(account_id: str, window_days: int) -> dict[str, Any]:
+    """Compute action/move metrics from mailbox_action_event.
+
+    Today the table is empty (no automated move worker), so this typically
+    returns the empty/pending shape with `available=False`. Once the worker
+    starts writing rows, the same query path lights up automatically.
+    """
+    if not _database_url():
+        return _empty_action_metrics(window_days)
+    try:
+        _ensure_account_tables()
+    except Exception:
+        return _empty_action_metrics(window_days)
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT count(*) FILTER (WHERE status = 'executed'),
+                           count(*) FILTER (WHERE status = 'failed'),
+                           count(*) FILTER (WHERE status = 'recommended'),
+                           count(*) FILTER (
+                               WHERE status = 'executed' AND action_type = 'move'
+                           ),
+                           max(occurred_at)
+                    FROM mailbox_action_event
+                    WHERE account_id = %s
+                      AND occurred_at >= now() - make_interval(days => %s)
+                    """,
+                    (account_id, window_days),
+                )
+                row = cursor.fetchone() or (0, 0, 0, 0, None)
+                cursor.execute(
+                    "SELECT count(*) FROM mailbox_action_event WHERE account_id = %s",
+                    (account_id,),
+                )
+                total = int((cursor.fetchone() or [0])[0])
+    except psycopg.Error:
+        return _empty_action_metrics(window_days)
+
+    available = bool(total)
+    return {
+        "available": available,
+        "reason": None if available else PENDING_REASON_ACTIONS,
+        "window_days": window_days,
+        "actions_executed": int(row[0] or 0),
+        "actions_failed": int(row[1] or 0),
+        "actions_recommended": int(row[2] or 0),
+        "messages_moved": int(row[3] or 0),
+        "last_action_at": row[4].isoformat() if row[4] else None,
+    }
+
+
+def _load_recent_sync_events(
+    account_id: str, window_days: int, limit: int = 50
+) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+    try:
+        _ensure_account_tables()
+    except Exception:
+        return []
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT operation, status, folders_seen, messages_seen,
+                           messages_persisted, errors, error_message,
+                           started_at, completed_at
+                    FROM sync_event
+                    WHERE account_id = %s
+                      AND completed_at >= now() - make_interval(days => %s)
+                    ORDER BY completed_at DESC
+                    LIMIT %s
+                    """,
+                    (account_id, window_days, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        return []
+
+    return [
+        {
+            "operation": row[0],
+            "status": row[1],
+            "folders_seen": row[2],
+            "messages_seen": row[3],
+            "messages_persisted": row[4],
+            "errors": int(row[5] or 0),
+            "error_message": row[6],
+            "started_at": row[7].isoformat() if row[7] else None,
+            "occurred_at": row[8].isoformat() if row[8] else None,
+        }
+        for row in rows
+    ]
 
 
 def _list_user_accounts(user_email: str) -> list[dict[str, Any]]:
@@ -1202,31 +1901,10 @@ def _summarize_folder_inventory(account_id: str) -> dict[str, Any]:
     }
 
 
-def _empty_volume_metrics() -> dict[str, Any]:
-    return {
-        "available": False,
-        "reason": PENDING_REASON_INGESTION,
-        "window_days": 7,
-        "messages_in": None,
-        "messages_processed": None,
-        "errors": None,
-        "by_day": [],
-    }
-
-
-def _empty_action_metrics() -> dict[str, Any]:
-    return {
-        "available": False,
-        "reason": PENDING_REASON_ACTIONS,
-        "window_days": 7,
-        "actions_recommended": None,
-        "actions_executed": None,
-        "actions_failed": None,
-        "last_action_at": None,
-    }
-
-
-def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
+def _account_dashboard_payload(
+    account_row: dict[str, Any],
+    window_days: int = DEFAULT_DASHBOARD_WINDOW_DAYS,
+) -> dict[str, Any]:
     folder_summary = _summarize_folder_inventory(account_row["account_id"])
     return {
         "account": {
@@ -1241,8 +1919,8 @@ def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
             "updated_at": account_row["updated_at"],
         },
         "folder_inventory": folder_summary,
-        "email_volume": _empty_volume_metrics(),
-        "action_activity": _empty_action_metrics(),
+        "email_volume": _load_volume_metrics(account_row["account_id"], window_days),
+        "action_activity": _load_action_metrics(account_row["account_id"], window_days),
     }
 
 
@@ -1298,14 +1976,16 @@ def list_accounts(
 
 @app.get("/dashboard/summary")
 def dashboard_summary(
+    window_days: int = Query(default=DEFAULT_DASHBOARD_WINDOW_DAYS, ge=1, le=90),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
     linked_name: str | None = Cookie(default=None, alias=NAME_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
+    window = _normalize_window_days(window_days)
 
     if rows:
-        per_account = [_account_dashboard_payload(row) for row in rows]
+        per_account = [_account_dashboard_payload(row, window_days=window) for row in rows]
     else:
         # No persisted accounts for this user — describe the session-only view
         # so the dashboard can render an honest "linked but not persisted"
@@ -1336,8 +2016,8 @@ def dashboard_summary(
                     "expected_dyc_target_count": len(DEFAULT_MVP_FOLDER_SPECS),
                     "is_bootstrapped": False,
                 },
-                "email_volume": _empty_volume_metrics(),
-                "action_activity": _empty_action_metrics(),
+                "email_volume": _empty_volume_metrics(window),
+                "action_activity": _empty_action_metrics(window),
             }
         ]
 
@@ -1352,18 +2032,26 @@ def dashboard_summary(
         "dyc_target_folders": sum(
             entry["folder_inventory"].get("dyc_target_folders") or 0 for entry in per_account
         ),
+        "messages_in": sum(
+            entry["email_volume"].get("messages_in") or 0 for entry in per_account
+        ),
+        "messages_persisted": sum(
+            entry["email_volume"].get("messages_persisted") or 0 for entry in per_account
+        ),
+        "messages_moved": sum(
+            entry["action_activity"].get("messages_moved") or 0 for entry in per_account
+        ),
+        "errors": sum(entry["email_volume"].get("errors") or 0 for entry in per_account),
     }
 
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
+        "window_days": window,
+        "supported_window_days": list(SUPPORTED_DASHBOARD_WINDOW_DAYS),
         "totals": totals,
         "accounts": per_account,
         "pending_instrumentation": [
-            {
-                "metric": "email_volume",
-                "reason": PENDING_REASON_INGESTION,
-            },
             {
                 "metric": "action_activity",
                 "reason": PENDING_REASON_ACTIONS,
@@ -1383,11 +2071,55 @@ def dashboard_summary(
 # fabricated/example notices.
 
 PENDING_REASON_MESSAGE_MOVEMENT = (
-    "Message movement instrumentation is pending. The runtime does not yet "
-    "log per-message ingest/route/move events; once the connector worker "
-    "writes message_ingestion_event / mailbox_action rows, this feed will "
-    "include them."
+    "Automated message movement is not yet implemented. The mailbox_action_event "
+    "table exists for instrumentation, but no worker writes to it; this feed "
+    "will populate once the move worker lands."
 )
+NO_RECENT_SYNC_THRESHOLD_HOURS = 24
+
+
+def _load_message_movement_events(
+    account_id: str, window_days: int, limit: int = 25
+) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+    try:
+        _ensure_account_tables()
+    except Exception:
+        return []
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT action_type, status, source_folder, target_folder,
+                           provider_message_id, error_message, occurred_at
+                    FROM mailbox_action_event
+                    WHERE account_id = %s
+                      AND occurred_at >= now() - make_interval(days => %s)
+                    ORDER BY occurred_at DESC
+                    LIMIT %s
+                    """,
+                    (account_id, window_days, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error:
+        return []
+
+    return [
+        {
+            "event_type": f"action.{row[0]}",
+            "status": row[1],
+            "source_folder": row[2],
+            "target_folder": row[3],
+            "provider_message_id": row[4],
+            "error_message": row[5],
+            "occurred_at": row[6].isoformat() if row[6] else None,
+        }
+        for row in rows
+    ]
 
 
 def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, Any]]:
@@ -1458,13 +2190,19 @@ def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, An
 @app.get("/activity")
 def activity_log(
     limit: int = Query(default=25, ge=1, le=100),
+    window_days: int = Query(default=DEFAULT_DASHBOARD_WINDOW_DAYS, ge=1, le=90),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
+    window = _normalize_window_days(window_days)
 
     folder_events: list[dict[str, Any]] = []
+    sync_events: list[dict[str, Any]] = []
+    movement_events: list[dict[str, Any]] = []
     folder_available = False
+    sync_available = False
+    movement_available = False
     for row in rows:
         events = _load_folder_activity(row["account_id"], limit=limit)
         for event in events:
@@ -1475,11 +2213,28 @@ def activity_log(
             folder_events.append(event)
         folder_available = True
 
-    folder_events.sort(
-        key=lambda event: event.get("occurred_at") or "",
-        reverse=True,
-    )
+        for sync in _load_recent_sync_events(row["account_id"], window, limit=limit):
+            sync["account"] = {
+                "account_id": row["account_id"],
+                "email": row["email"],
+            }
+            sync_events.append(sync)
+        sync_available = True
+
+        for movement in _load_message_movement_events(row["account_id"], window, limit=limit):
+            movement["account"] = {
+                "account_id": row["account_id"],
+                "email": row["email"],
+            }
+            movement_events.append(movement)
+
+    folder_events.sort(key=lambda event: event.get("occurred_at") or "", reverse=True)
     folder_events = folder_events[:limit]
+    sync_events.sort(key=lambda event: event.get("occurred_at") or "", reverse=True)
+    sync_events = sync_events[:limit]
+    movement_events.sort(key=lambda event: event.get("occurred_at") or "", reverse=True)
+    movement_events = movement_events[:limit]
+    movement_available = bool(movement_events)
 
     folder_reason: str | None = None
     if not folder_available:
@@ -1489,22 +2244,39 @@ def activity_log(
             "callback with DATABASE_URL configured."
         )
 
+    sync_reason: str | None = None
+    if not sync_available:
+        sync_reason = (
+            "No connected_account rows for this session; sync events become "
+            "available once a folder/message sync runs against a persisted "
+            "account."
+        )
+
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
+        "window_days": window,
+        "supported_window_days": list(SUPPORTED_DASHBOARD_WINDOW_DAYS),
+        "sync_activity": {
+            "available": sync_available,
+            "reason": sync_reason,
+            "events": sync_events,
+        },
         "folder_activity": {
             "available": folder_available,
             "reason": folder_reason,
             "events": folder_events,
         },
         "message_movement": {
-            "available": False,
-            "reason": PENDING_REASON_MESSAGE_MOVEMENT,
-            "events": [],
+            "available": movement_available,
+            "reason": None if movement_available else PENDING_REASON_MESSAGE_MOVEMENT,
+            "events": movement_events,
         },
-        "pending_instrumentation": [
-            {"metric": "message_movement", "reason": PENDING_REASON_MESSAGE_MOVEMENT},
-        ],
+        "pending_instrumentation": (
+            [{"metric": "message_movement", "reason": PENDING_REASON_MESSAGE_MOVEMENT}]
+            if not movement_available
+            else []
+        ),
     }
 
 
@@ -1615,17 +2387,102 @@ def _compute_alerts(
                     }
                 )
 
+    if _database_url():
+        for account in accounts:
+            account_id = account.get("account_id")
+            email_addr = account.get("email")
+            if not account_id:
+                continue
+
+            volume = _load_volume_metrics(account_id, DEFAULT_DASHBOARD_WINDOW_DAYS)
+            last_sync_iso = volume.get("last_sync_at")
+            last_sync_status = volume.get("last_sync_status")
+
+            if not last_sync_iso:
+                alerts.append(
+                    {
+                        "code": "no_message_sync_yet",
+                        "severity": "info",
+                        "message": (
+                            f"No message sync has run for {email_addr} yet. "
+                            "Email volume tiles will stay at zero until a sync runs."
+                        ),
+                        "next_action": (
+                            "Run POST /mail/messages/sync (Sync messages action in "
+                            "API/Diagnostics) to start populating message_sighting rows."
+                        ),
+                        "context": {"email": email_addr},
+                    }
+                )
+            else:
+                last_sync_dt = _parse_graph_datetime(last_sync_iso)
+                stale = (
+                    last_sync_dt is not None
+                    and last_sync_dt < _utcnow() - timedelta(hours=NO_RECENT_SYNC_THRESHOLD_HOURS)
+                )
+                if stale:
+                    alerts.append(
+                        {
+                            "code": "stale_message_sync",
+                            "severity": "warning",
+                            "message": (
+                                f"Last message sync for {email_addr} ran more than "
+                                f"{NO_RECENT_SYNC_THRESHOLD_HOURS}h ago "
+                                f"({last_sync_iso})."
+                            ),
+                            "next_action": (
+                                "Re-run the message sync to pick up new mail and "
+                                "refresh the dashboard counts."
+                            ),
+                            "context": {"email": email_addr, "last_sync_at": last_sync_iso},
+                        }
+                    )
+                if last_sync_status == "error":
+                    alerts.append(
+                        {
+                            "code": "recent_message_sync_error",
+                            "severity": "error",
+                            "message": (
+                                f"The most recent message sync for {email_addr} failed: "
+                                f"{volume.get('last_sync_error') or 'unknown error'}"
+                            ),
+                            "next_action": (
+                                "Check the API logs and retry the sync. If the "
+                                "failure persists, re-run Microsoft sign-in."
+                            ),
+                            "context": {"email": email_addr},
+                        }
+                    )
+                if (volume.get("messages_persisted") or 0) == 0 and last_sync_status == "success":
+                    alerts.append(
+                        {
+                            "code": "no_messages_seen",
+                            "severity": "info",
+                            "message": (
+                                f"Sync ran for {email_addr} but no messages were "
+                                "persisted. The mailbox may be empty or the scope "
+                                "needs widening."
+                            ),
+                            "next_action": (
+                                "Try a larger limit, or sync a specific folder via "
+                                "POST /mail/messages/sync?folder_id=…"
+                            ),
+                            "context": {"email": email_addr},
+                        }
+                    )
+
     alerts.append(
         {
-            "code": "activity_instrumentation_pending",
+            "code": "move_worker_pending",
             "severity": "info",
             "message": (
-                "Per-message activity (ingest, route, move) is not yet logged. "
-                "The Activity Log shows folder bootstrap/sync events only."
+                "Automated message movement is not yet implemented. The Moved "
+                "tile and Action activity will stay at zero until the move "
+                "worker writes mailbox_action_event rows."
             ),
             "next_action": (
                 "Track follow-on work in docs/dashboard-instrumentation.md → "
-                "pending instrumentation."
+                "remaining instrumentation."
             ),
         }
     )
@@ -1678,10 +2535,12 @@ def alerts(
 @app.get("/accounts/{email}/dashboard")
 def account_dashboard(
     email: str,
+    window_days: int = Query(default=DEFAULT_DASHBOARD_WINDOW_DAYS, ge=1, le=90),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
+    window = _normalize_window_days(window_days)
 
     target = next((row for row in rows if row["email"].lower() == email.lower()), None)
     if not target:
@@ -1693,9 +2552,10 @@ def account_dashboard(
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
-        **_account_dashboard_payload(target),
+        "window_days": window,
+        "supported_window_days": list(SUPPORTED_DASHBOARD_WINDOW_DAYS),
+        **_account_dashboard_payload(target, window_days=window),
         "pending_instrumentation": [
-            {"metric": "email_volume", "reason": PENDING_REASON_INGESTION},
             {"metric": "action_activity", "reason": PENDING_REASON_ACTIONS},
         ],
     }

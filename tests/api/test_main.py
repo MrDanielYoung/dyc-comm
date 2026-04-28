@@ -700,6 +700,7 @@ def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
         ("GET", "/mail/folders/inventory"),
         ("POST", "/mail/folders/bootstrap"),
         ("POST", "/mail/folders/inventory/sync"),
+        ("POST", "/mail/messages/sync"),
         ("GET", "/accounts"),
         ("GET", "/dashboard/summary"),
         ("GET", "/accounts/daniel@danielyoung.io/dashboard"),
@@ -808,18 +809,27 @@ def test_dashboard_summary_session_only_view(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["user"] == {"email": "daniel@danielyoung.io"}
-    assert payload["totals"] == {
-        "connected_accounts": 1,
-        "mailbox_ready_accounts": 0,
-        "total_folders": 0,
-        "dyc_target_folders": 0,
-    }
+    assert payload["window_days"] == 7
+    assert payload["supported_window_days"] == [1, 7, 30]
+    totals = payload["totals"]
+    assert totals["connected_accounts"] == 1
+    assert totals["mailbox_ready_accounts"] == 0
+    assert totals["total_folders"] == 0
+    assert totals["dyc_target_folders"] == 0
+    # New roll-up tiles default to zero in session-only mode.
+    assert totals["messages_in"] == 0
+    assert totals["messages_persisted"] == 0
+    assert totals["messages_moved"] == 0
+    assert totals["errors"] == 0
     assert payload["accounts"][0]["account"]["status"] == "session_only"
     assert payload["accounts"][0]["folder_inventory"]["available"] is False
     assert payload["accounts"][0]["email_volume"]["available"] is False
     assert payload["accounts"][0]["action_activity"]["available"] is False
     pending = {entry["metric"] for entry in payload["pending_instrumentation"]}
-    assert pending == {"email_volume", "action_activity"}
+    # email_volume is no longer in pending_instrumentation: the volume tile
+    # surfaces an honest empty state with `available=false` until a sync runs,
+    # rather than being permanently blocked behind a connector worker.
+    assert pending == {"action_activity"}
 
 
 def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
@@ -878,6 +888,9 @@ def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
     assert payload["totals"]["mailbox_ready_accounts"] == 1
     assert payload["totals"]["total_folders"] == 3
     assert payload["totals"]["dyc_target_folders"] == 1
+    # New roll-up tiles default to zero with no DATABASE_URL set.
+    assert payload["totals"]["messages_in"] == 0
+    assert payload["totals"]["messages_moved"] == 0
 
     account_entry = payload["accounts"][0]
     assert account_entry["account"]["mailbox_access_ready"] is True
@@ -890,7 +903,11 @@ def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
         "is_bootstrapped": False,
     }
     assert account_entry["email_volume"]["available"] is False
-    assert account_entry["email_volume"]["messages_in"] is None
+    # The empty volume metrics now report 0 (and not None) for counters so the
+    # dashboard can render an honest empty state without null-handling.
+    assert account_entry["email_volume"]["messages_in"] == 0
+    assert account_entry["email_volume"]["messages_persisted"] == 0
+    assert account_entry["email_volume"]["window_days"] == 7
     assert account_entry["action_activity"]["available"] is False
 
 
@@ -1083,7 +1100,7 @@ def test_alerts_flags_no_connected_accounts_and_runtime(monkeypatch):
     codes = {item["code"] for item in payload["alerts"]}
     assert "runtime_config_missing" in codes
     assert "mailbox_access_not_ready" in codes
-    assert "activity_instrumentation_pending" in codes
+    assert "move_worker_pending" in codes
     assert "database_unavailable" in codes
     assert payload["counts"]["error"] >= 1
 
@@ -1189,4 +1206,475 @@ def test_alerts_clean_when_state_is_healthy(monkeypatch):
     assert "database_unavailable" not in codes
     assert "folder_inventory_missing" not in codes
     assert "folder_inventory_incomplete" not in codes
-    assert "activity_instrumentation_pending" in codes
+    assert "move_worker_pending" in codes
+
+
+# =============================================================================
+# Message-sync instrumentation slice
+# =============================================================================
+
+
+def test_truncate_subject_clips_to_limit():
+    short = "Hello world"
+    assert main._truncate_subject(short) == short
+    long_value = "x" * (main.SUBJECT_PREVIEW_MAX_CHARS + 50)
+    truncated = main._truncate_subject(long_value)
+    assert truncated is not None
+    assert len(truncated) == main.SUBJECT_PREVIEW_MAX_CHARS
+    assert truncated.endswith("…")
+    assert main._truncate_subject(None) is None
+    assert main._truncate_subject("   ") == ""
+
+
+def test_parse_graph_datetime_handles_z_suffix():
+    parsed = main._parse_graph_datetime("2026-04-28T10:15:30Z")
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert main._parse_graph_datetime(None) is None
+    assert main._parse_graph_datetime("not-a-date") is None
+
+
+def test_normalize_window_days_clamps_to_supported_buckets():
+    assert main._normalize_window_days(None) == 7
+    assert main._normalize_window_days(0) == 7
+    assert main._normalize_window_days(-3) == 7
+    assert main._normalize_window_days(1) == 1
+    assert main._normalize_window_days(3) == 7
+    assert main._normalize_window_days(7) == 7
+    assert main._normalize_window_days(15) == 30
+    assert main._normalize_window_days(90) == 30
+
+
+def test_record_sync_event_no_op_without_database(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    # Should not raise, should not touch psycopg.
+    main._record_sync_event(
+        "account-123",
+        "messages.sync",
+        status="success",
+        started_at=main._utcnow(),
+        messages_seen=3,
+    )
+
+
+def test_messages_sync_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.post("/mail/messages/sync")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_messages_sync_persists_and_records_sync_event(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        assert email == "daniel@danielyoung.io"
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    captured_messages: list[list[dict]] = []
+    sync_events: list[dict] = []
+
+    async def fake_list_recent_messages(access_token, folder_id, limit):
+        assert access_token == "graph-token"
+        assert folder_id is None
+        assert limit == 50
+        return [
+            {
+                "id": "msg-1",
+                "parentFolderId": "inbox-id",
+                "subject": "Hello",
+                "receivedDateTime": "2026-04-28T08:30:00Z",
+                "isRead": False,
+                "hasAttachments": False,
+            },
+            {
+                "id": "msg-2",
+                "parentFolderId": "inbox-id",
+                "subject": "World",
+                "receivedDateTime": "2026-04-28T09:00:00Z",
+                "isRead": True,
+                "hasAttachments": True,
+            },
+        ]
+
+    def fake_persist(account_id, messages):
+        assert account_id == "account-123"
+        captured_messages.append(messages)
+        return (len(messages), len(messages))
+
+    def fake_record(account_id, operation, **kwargs):
+        sync_events.append({"account_id": account_id, "operation": operation, **kwargs})
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", fake_list_recent_messages)
+    monkeypatch.setattr(main, "_persist_message_sightings", fake_persist)
+    monkeypatch.setattr(main, "_record_sync_event", fake_record)
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/sync",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["messages_seen"] == 2
+    assert body["messages_persisted"] == 2
+    assert body["scope"]["folder_id"] is None
+    assert len(captured_messages) == 1
+    assert len(sync_events) == 1
+    event = sync_events[0]
+    assert event["operation"] == "messages.sync"
+    assert event["status"] == "success"
+    assert event["messages_seen"] == 2
+    assert event["messages_persisted"] == 2
+
+
+def test_messages_sync_records_error_and_reraises(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def boom(access_token, folder_id, limit):
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=502, detail="Graph blew up")
+
+    sync_events: list[dict] = []
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", boom)
+    monkeypatch.setattr(
+        main,
+        "_record_sync_event",
+        lambda account_id, operation, **kwargs: sync_events.append(
+            {"account_id": account_id, "operation": operation, **kwargs}
+        ),
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/sync",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 502
+    assert sync_events
+    assert sync_events[0]["status"] == "error"
+    assert sync_events[0]["operation"] == "messages.sync"
+    assert sync_events[0]["errors"] == 1
+
+
+def test_bootstrap_records_sync_event(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_ensure(access_token):
+        return [{"id": "review-id", "displayName": "10 - Review"}]
+
+    sync_events: list[dict] = []
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_ensure_default_mail_folders", fake_ensure)
+    monkeypatch.setattr(main, "_persist_folder_inventory", lambda *args, **kw: None)
+    monkeypatch.setattr(
+        main,
+        "_record_sync_event",
+        lambda account_id, operation, **kwargs: sync_events.append(
+            {"operation": operation, **kwargs}
+        ),
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/folders/bootstrap",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    assert sync_events
+    assert sync_events[0]["operation"] == "folder.bootstrap"
+    assert sync_events[0]["status"] == "success"
+    assert sync_events[0]["folders_seen"] == 1
+
+
+def test_dashboard_summary_uses_window_filter(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(main, "_load_folder_inventory", lambda account_id: [])
+
+    captured_windows: list[int] = []
+
+    def fake_volume(account_id, window_days):
+        captured_windows.append(window_days)
+        return {
+            "available": True,
+            "reason": None,
+            "window_days": window_days,
+            "messages_in": 5,
+            "messages_persisted": 5,
+            "errors": 0,
+            "last_message_received_at": None,
+            "last_sync_at": "2026-04-28T08:00:00+00:00",
+            "last_sync_status": "success",
+            "last_sync_error": None,
+            "by_day": [{"day": "2026-04-28", "messages_in": 5}],
+            "by_folder": [{"folder": "Inbox", "messages_in": 5}],
+        }
+
+    monkeypatch.setattr(main, "_load_volume_metrics", fake_volume)
+    monkeypatch.setattr(
+        main,
+        "_load_action_metrics",
+        lambda account_id, window_days: main._empty_action_metrics(window_days),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/summary?window_days=1",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["window_days"] == 1
+    # Free-form window_days values are normalized into the 1/7/30 buckets so
+    # the worker code paths only deal with three windows.
+    assert captured_windows == [1]
+    totals = payload["totals"]
+    assert totals["messages_in"] == 5
+    assert totals["messages_persisted"] == 5
+    assert payload["accounts"][0]["email_volume"]["available"] is True
+
+
+def test_activity_includes_sync_events(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(main, "_load_folder_activity", lambda account_id, limit: [])
+    monkeypatch.setattr(
+        main,
+        "_load_recent_sync_events",
+        lambda account_id, window_days, limit=50: [
+            {
+                "operation": "messages.sync",
+                "status": "success",
+                "folders_seen": None,
+                "messages_seen": 12,
+                "messages_persisted": 12,
+                "errors": 0,
+                "error_message": None,
+                "started_at": "2026-04-28T08:00:00+00:00",
+                "occurred_at": "2026-04-28T08:01:00+00:00",
+            },
+            {
+                "operation": "folder.bootstrap",
+                "status": "success",
+                "folders_seen": 9,
+                "messages_seen": None,
+                "messages_persisted": None,
+                "errors": 0,
+                "error_message": None,
+                "started_at": "2026-04-27T10:00:00+00:00",
+                "occurred_at": "2026-04-27T10:00:01+00:00",
+            },
+        ],
+    )
+    monkeypatch.setattr(main, "_load_message_movement_events", lambda *args, **kw: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/activity?window_days=7",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sync_activity"]["available"] is True
+    operations = [event["operation"] for event in payload["sync_activity"]["events"]]
+    assert operations == ["messages.sync", "folder.bootstrap"]
+    assert payload["sync_activity"]["events"][0]["account"]["email"] == "daniel@danielyoung.io"
+    assert payload["message_movement"]["available"] is False
+
+
+def test_alerts_flag_no_message_sync_yet(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for var in (
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_summarize_folder_inventory",
+        lambda account_id: {
+            "available": True,
+            "total_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "dyc_target_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "by_ownership": {"dyc_managed": len(main.DEFAULT_MVP_FOLDER_SPECS)},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": True,
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "_load_volume_metrics",
+        lambda account_id, window_days: main._empty_volume_metrics(window_days),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    codes = {item["code"] for item in response.json()["alerts"]}
+    assert "no_message_sync_yet" in codes
+    assert "move_worker_pending" in codes
+
+
+def test_alerts_flag_recent_message_sync_error(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for var in (
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_summarize_folder_inventory",
+        lambda account_id: {
+            "available": True,
+            "total_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "dyc_target_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "by_ownership": {"dyc_managed": len(main.DEFAULT_MVP_FOLDER_SPECS)},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": True,
+        },
+    )
+    # A recent sync that ended in failure with an explicit error.
+    monkeypatch.setattr(
+        main,
+        "_load_volume_metrics",
+        lambda account_id, window_days: {
+            "available": True,
+            "reason": None,
+            "window_days": window_days,
+            "messages_in": 0,
+            "messages_persisted": 0,
+            "errors": 1,
+            "last_message_received_at": None,
+            "last_sync_at": main._utcnow().isoformat(),
+            "last_sync_status": "error",
+            "last_sync_error": "Graph 502",
+            "by_day": [],
+            "by_folder": [],
+        },
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    codes = {item["code"] for item in response.json()["alerts"]}
+    assert "recent_message_sync_error" in codes
+
+
+def test_messages_sync_cli_subcommand_parses():
+    from apps.api.app import cli
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["messages-sync", "--folder-id", "abc", "--limit", "25"])
+    assert args.func is cli.cmd_messages_sync
+    assert args.folder_id == "abc"
+    assert args.limit == 25
