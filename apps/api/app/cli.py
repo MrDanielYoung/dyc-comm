@@ -34,8 +34,9 @@ def _request(
     path: str,
     *,
     params: dict[str, Any] | None = None,
+    timeout: float | None = None,
 ) -> Any:
-    response = client.request(method, path, params=params)
+    response = client.request(method, path, params=params, timeout=timeout)
     response.raise_for_status()
     if not response.text:
         return {}
@@ -110,6 +111,38 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingest_dry_run(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {"limit": int(args.limit)}
+    if args.email:
+        params["email"] = args.email
+    with _client(args.api_base, args.cookie_file) as client:
+        # Operator runs may pull and classify up to 50 messages; bump the
+        # per-call timeout above the 20s default to leave headroom.
+        payload = _request(
+            client,
+            "POST",
+            "/mail/messages/ingest-dry-run",
+            params=params,
+            timeout=120.0,
+        )
+        _save_cookies(client, args.cookie_file)
+    _print(payload)
+    return 0
+
+
+def cmd_recommendations(args: argparse.Namespace) -> int:
+    with _client(args.api_base, args.cookie_file) as client:
+        payload = _request(
+            client,
+            "GET",
+            "/mail/messages/recommendations",
+            params={"limit": int(args.limit)},
+        )
+        _save_cookies(client, args.cookie_file)
+    _print(payload)
+    return 0
+
+
 def cmd_auth_url(args: argparse.Namespace) -> int:
     with _client(args.api_base, args.cookie_file) as client:
         response = client.get("/auth/microsoft/start")
@@ -171,6 +204,39 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_url = subparsers.add_parser("auth-url", help="Print the Microsoft auth URL from the API")
     auth_url.set_defaults(func=cmd_auth_url)
+
+    ingest_dry_run = subparsers.add_parser(
+        "ingest-dry-run",
+        help=(
+            "Operator-triggered, non-destructive ingest of recent messages "
+            "with dry-run classification. Does not move, send, or delete mail."
+        ),
+    )
+    ingest_dry_run.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of recent messages to fetch (1-50, default 10)",
+    )
+    ingest_dry_run.add_argument(
+        "--email",
+        type=str,
+        default=None,
+        help="Account email; must match the signed-in session (e.g. daniel@danielyoung.io)",
+    )
+    ingest_dry_run.set_defaults(func=cmd_ingest_dry_run)
+
+    recommendations = subparsers.add_parser(
+        "recommendations",
+        help="List recent dry-run classification recommendations for the signed-in account.",
+    )
+    recommendations.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum recommendations to return (1-200, default 50)",
+    )
+    recommendations.set_defaults(func=cmd_recommendations)
 
     return parser
 

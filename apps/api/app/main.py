@@ -693,6 +693,107 @@ def _ensure_account_tables() -> None:
                 ON mailbox_folder(account_id)
                 """
             )
+            # Minimal message metadata captured by the dry-run ingest slice.
+            # We persist only the fields needed to render the dashboard log:
+            # subject/sender/received_at/folder + provider ids for idempotency.
+            # No body text, no attachments, no thread normalization yet.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS email_message_dryrun (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id) ON DELETE CASCADE,
+                    provider_message_id TEXT NOT NULL,
+                    provider_conversation_id TEXT,
+                    subject TEXT,
+                    from_address TEXT,
+                    from_name TEXT,
+                    received_at TIMESTAMPTZ,
+                    is_unread BOOLEAN NOT NULL DEFAULT false,
+                    parent_folder_id TEXT,
+                    parent_folder_name TEXT,
+                    body_preview TEXT,
+                    web_link TEXT,
+                    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(account_id, provider_message_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_email_message_dryrun_account
+                ON email_message_dryrun(account_id, received_at DESC)
+                """
+            )
+            # One classification recommendation row per ingest run per message.
+            # The dry-run log appends, never overwrites — so the dashboard can
+            # render a history of recommendations and the audit trail can show
+            # if the same message was classified differently across runs.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS message_classification_recommendation (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id) ON DELETE CASCADE,
+                    message_id TEXT NOT NULL REFERENCES email_message_dryrun(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL,
+                    classifier_version TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    recommended_folder TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    confidence_band TEXT NOT NULL,
+                    forced_review BOOLEAN NOT NULL DEFAULT false,
+                    reasons TEXT[] NOT NULL DEFAULT '{}',
+                    safety_flags TEXT[] NOT NULL DEFAULT '{}',
+                    provider_consulted BOOLEAN NOT NULL DEFAULT false,
+                    provider TEXT,
+                    status TEXT NOT NULL DEFAULT 'recommended',
+                    error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_classification_rec_account_created
+                ON message_classification_recommendation(account_id, created_at DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_classification_rec_run
+                ON message_classification_recommendation(run_id)
+                """
+            )
+            # Audit log of dry-run ingest runs (operator-triggered). Each row
+            # records the run scope, totals, and any provider/Graph errors so
+            # the dashboard activity feed can render run-level status without
+            # walking individual recommendations.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dryrun_ingest_run (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id) ON DELETE CASCADE,
+                    triggered_by TEXT,
+                    requested_limit INTEGER NOT NULL,
+                    fetched_count INTEGER NOT NULL DEFAULT 0,
+                    classified_count INTEGER NOT NULL DEFAULT 0,
+                    forced_review_count INTEGER NOT NULL DEFAULT 0,
+                    error_count INTEGER NOT NULL DEFAULT 0,
+                    provider_consulted BOOLEAN NOT NULL DEFAULT false,
+                    provider TEXT,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    error TEXT,
+                    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    finished_at TIMESTAMPTZ
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_dryrun_ingest_run_account
+                ON dryrun_ingest_run(account_id, started_at DESC)
+                """
+            )
         connection.commit()
 
     _DB_BOOTSTRAPPED = True
@@ -1155,6 +1256,499 @@ async def _ensure_default_mail_folders(access_token: str) -> list[dict[str, Any]
     return ensured
 
 
+# =========================================================================
+# Dry-run message ingest + classification
+# =========================================================================
+#
+# Operator-triggered slice for daniel@danielyoung.io evaluation. This path
+# fetches a small batch of recent messages from Microsoft Graph in
+# read-only mode (no moves, no sends, no deletes, no folder changes),
+# stores minimal metadata, runs the deterministic classifier, and writes
+# one classification recommendation per message. The Microsoft Graph
+# query uses GET /me/messages and never invokes any mutating endpoint.
+
+INGEST_DRYRUN_MAX_LIMIT = 50
+INGEST_DRYRUN_DEFAULT_LIMIT = 10
+CLASSIFIER_VERSION = "dryrun-deterministic-v1"
+
+
+def _parse_graph_datetime(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        # Microsoft Graph returns ISO 8601, frequently with a trailing Z.
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _extract_sender(message: dict[str, Any]) -> tuple[str | None, str | None]:
+    sender = message.get("from") or message.get("sender") or {}
+    if not isinstance(sender, dict):
+        return None, None
+    email_address = sender.get("emailAddress") or {}
+    if not isinstance(email_address, dict):
+        return None, None
+    return email_address.get("address"), email_address.get("name")
+
+
+def _extract_body_preview(message: dict[str, Any]) -> str:
+    preview = message.get("bodyPreview")
+    if isinstance(preview, str):
+        return preview
+    return ""
+
+
+async def _list_recent_messages(
+    access_token: str, limit: int
+) -> list[dict[str, Any]]:
+    """Fetch a recent batch of messages from /me/messages (read-only).
+
+    The selected fields are the minimum required by the dashboard log:
+    sender, subject, received_at, folder, web link, and the provider ids
+    needed for idempotency. ``$top`` is bounded by the caller. We do not
+    use ``$delta`` here because this is an operator-triggered evaluation,
+    not a continuous sync.
+    """
+    safe_limit = max(1, min(int(limit), INGEST_DRYRUN_MAX_LIMIT))
+    payload = await _graph_get(
+        access_token,
+        "/me/messages",
+        params={
+            "$top": safe_limit,
+            "$orderby": "receivedDateTime desc",
+            "$select": (
+                "id,conversationId,subject,from,sender,receivedDateTime,"
+                "isRead,bodyPreview,parentFolderId,webLink"
+            ),
+        },
+    )
+    return payload.get("value", []) or []
+
+
+def _folder_display_name_for_id(account_id: str, provider_folder_id: str | None) -> str | None:
+    if not provider_folder_id:
+        return None
+    folders = _load_folder_inventory(account_id)
+    for folder in folders:
+        if folder.get("id") == provider_folder_id:
+            return folder.get("displayName")
+    return None
+
+
+def _persist_message_metadata(
+    account_id: str, message: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Upsert a single message's metadata. Returns (row_id, normalized).
+
+    ``normalized`` is the dict the rest of the slice uses for classifier
+    input + dashboard rendering, so callers don't need to peek at the raw
+    Graph payload again.
+    """
+    if not _database_url():
+        raise HTTPException(
+            status_code=409,
+            detail="Database-backed message ingest requires DATABASE_URL.",
+        )
+    _ensure_account_tables()
+    psycopg = _psycopg()
+
+    provider_message_id = message.get("id") or ""
+    provider_conversation_id = message.get("conversationId")
+    subject = message.get("subject") or ""
+    from_address, from_name = _extract_sender(message)
+    received_at = _parse_graph_datetime(message.get("receivedDateTime"))
+    is_unread = not bool(message.get("isRead"))
+    parent_folder_id = message.get("parentFolderId")
+    body_preview = _extract_body_preview(message)
+    web_link = message.get("webLink")
+    parent_folder_name = _folder_display_name_for_id(account_id, parent_folder_id)
+
+    row_id = str(uuid.uuid4())
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO email_message_dryrun (
+                        id, account_id, provider_message_id,
+                        provider_conversation_id, subject,
+                        from_address, from_name, received_at,
+                        is_unread, parent_folder_id, parent_folder_name,
+                        body_preview, web_link
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (account_id, provider_message_id) DO UPDATE
+                    SET subject = EXCLUDED.subject,
+                        from_address = EXCLUDED.from_address,
+                        from_name = EXCLUDED.from_name,
+                        received_at = EXCLUDED.received_at,
+                        is_unread = EXCLUDED.is_unread,
+                        parent_folder_id = EXCLUDED.parent_folder_id,
+                        parent_folder_name = EXCLUDED.parent_folder_name,
+                        body_preview = EXCLUDED.body_preview,
+                        web_link = EXCLUDED.web_link,
+                        last_seen_at = now()
+                    RETURNING id
+                    """,
+                    (
+                        row_id,
+                        account_id,
+                        provider_message_id,
+                        provider_conversation_id,
+                        subject,
+                        from_address,
+                        from_name,
+                        received_at,
+                        is_unread,
+                        parent_folder_id,
+                        parent_folder_name,
+                        body_preview,
+                        web_link,
+                    ),
+                )
+                persisted_id = cursor.fetchone()[0]
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist message metadata to PostgreSQL.",
+        ) from exc
+
+    normalized = {
+        "id": persisted_id,
+        "provider_message_id": provider_message_id,
+        "provider_conversation_id": provider_conversation_id,
+        "subject": subject,
+        "from_address": from_address,
+        "from_name": from_name,
+        "received_at": received_at.isoformat() if received_at else None,
+        "is_unread": is_unread,
+        "parent_folder_id": parent_folder_id,
+        "parent_folder_name": parent_folder_name,
+        "body_preview": body_preview,
+        "web_link": web_link,
+    }
+    return persisted_id, normalized
+
+
+def _persist_classification_recommendation(
+    *,
+    account_id: str,
+    message_row_id: str,
+    run_id: str,
+    decision: classifier_module.ClassificationDecision,
+    status: str = "recommended",
+    error: str | None = None,
+) -> str:
+    if not _database_url():
+        raise HTTPException(
+            status_code=409,
+            detail="Database-backed classification log requires DATABASE_URL.",
+        )
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    rec_id = str(uuid.uuid4())
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO message_classification_recommendation (
+                        id, account_id, message_id, run_id,
+                        classifier_version,
+                        category, recommended_folder,
+                        confidence, confidence_band, forced_review,
+                        reasons, safety_flags,
+                        provider_consulted, provider,
+                        status, error
+                    )
+                    VALUES (
+                        %s, %s, %s, %s,
+                        %s,
+                        %s, %s,
+                        %s, %s, %s,
+                        %s, %s,
+                        %s, %s,
+                        %s, %s
+                    )
+                    """,
+                    (
+                        rec_id,
+                        account_id,
+                        message_row_id,
+                        run_id,
+                        CLASSIFIER_VERSION,
+                        decision.category,
+                        decision.recommended_folder,
+                        float(decision.confidence),
+                        decision.confidence_band,
+                        bool(decision.forced_review),
+                        list(decision.reasons),
+                        list(decision.safety_flags),
+                        bool(decision.provider_consulted),
+                        decision.provider,
+                        status,
+                        error,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist classification recommendation to PostgreSQL.",
+        ) from exc
+    return rec_id
+
+
+def _start_dryrun_run(
+    *,
+    account_id: str,
+    triggered_by: str | None,
+    requested_limit: int,
+    provider_consulted: bool,
+    provider: str | None,
+) -> str:
+    if not _database_url():
+        raise HTTPException(
+            status_code=409,
+            detail="Database-backed ingest run audit requires DATABASE_URL.",
+        )
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    run_id = str(uuid.uuid4())
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO dryrun_ingest_run (
+                        id, account_id, triggered_by, requested_limit,
+                        provider_consulted, provider, status
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, 'running')
+                    """,
+                    (
+                        run_id,
+                        account_id,
+                        triggered_by,
+                        int(requested_limit),
+                        bool(provider_consulted),
+                        provider,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to record dry-run ingest run start.",
+        ) from exc
+    return run_id
+
+
+def _finish_dryrun_run(
+    *,
+    run_id: str,
+    fetched_count: int,
+    classified_count: int,
+    forced_review_count: int,
+    error_count: int,
+    status: str,
+    error: str | None = None,
+) -> None:
+    if not _database_url():
+        return
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE dryrun_ingest_run
+                    SET fetched_count = %s,
+                        classified_count = %s,
+                        forced_review_count = %s,
+                        error_count = %s,
+                        status = %s,
+                        error = %s,
+                        finished_at = now()
+                    WHERE id = %s
+                    """,
+                    (
+                        fetched_count,
+                        classified_count,
+                        forced_review_count,
+                        error_count,
+                        status,
+                        error,
+                        run_id,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to record dry-run ingest run completion.",
+        ) from exc
+
+
+def _load_dryrun_recommendations(
+    account_id: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        r.id,
+                        r.run_id,
+                        r.classifier_version,
+                        r.category,
+                        r.recommended_folder,
+                        r.confidence,
+                        r.confidence_band,
+                        r.forced_review,
+                        r.reasons,
+                        r.safety_flags,
+                        r.provider_consulted,
+                        r.provider,
+                        r.status,
+                        r.error,
+                        r.created_at,
+                        m.id,
+                        m.provider_message_id,
+                        m.subject,
+                        m.from_address,
+                        m.from_name,
+                        m.received_at,
+                        m.parent_folder_name,
+                        m.web_link
+                    FROM message_classification_recommendation r
+                    JOIN email_message_dryrun m ON m.id = r.message_id
+                    WHERE r.account_id = %s
+                    ORDER BY r.created_at DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load classification recommendations from PostgreSQL.",
+        ) from exc
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        events.append(
+            {
+                "recommendation_id": row[0],
+                "run_id": row[1],
+                "classifier_version": row[2],
+                "category": row[3],
+                "recommended_folder": row[4],
+                "confidence": float(row[5]) if row[5] is not None else 0.0,
+                "confidence_band": row[6],
+                "forced_review": bool(row[7]),
+                "reasons": list(row[8] or []),
+                "safety_flags": list(row[9] or []),
+                "provider_consulted": bool(row[10]),
+                "provider": row[11],
+                "status": row[12],
+                "error": row[13],
+                "created_at": row[14].isoformat() if row[14] else None,
+                "message": {
+                    "id": row[15],
+                    "provider_message_id": row[16],
+                    "subject": row[17],
+                    "from_address": row[18],
+                    "from_name": row[19],
+                    "received_at": row[20].isoformat() if row[20] else None,
+                    "parent_folder_name": row[21],
+                    "web_link": row[22],
+                },
+            }
+        )
+    return events
+
+
+def _load_dryrun_runs(account_id: str, limit: int = 25) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id, triggered_by, requested_limit,
+                        fetched_count, classified_count, forced_review_count,
+                        error_count, provider_consulted, provider,
+                        status, error, started_at, finished_at
+                    FROM dryrun_ingest_run
+                    WHERE account_id = %s
+                    ORDER BY started_at DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load dry-run ingest runs from PostgreSQL.",
+        ) from exc
+    return [
+        {
+            "run_id": row[0],
+            "triggered_by": row[1],
+            "requested_limit": row[2],
+            "fetched_count": row[3],
+            "classified_count": row[4],
+            "forced_review_count": row[5],
+            "error_count": row[6],
+            "provider_consulted": bool(row[7]),
+            "provider": row[8],
+            "status": row[9],
+            "error": row[10],
+            "started_at": row[11].isoformat() if row[11] else None,
+            "finished_at": row[12].isoformat() if row[12] else None,
+        }
+        for row in rows
+    ]
+
+
+def _classify_message_for_dryrun(
+    normalized: dict[str, Any],
+    *,
+    provider_config: classifier_module.AzureAIProviderConfig,
+) -> classifier_module.ClassificationDecision:
+    """Build classifier input from a normalized message and run the classifier.
+
+    The deterministic classifier never calls a real provider; the
+    ``provider_config`` is recorded for audit so operators can tell which
+    provider would have been consulted if it were configured.
+    """
+    payload = classifier_module.ClassificationInput(
+        subject=normalized.get("subject") or "",
+        body=normalized.get("body_preview") or "",
+        sender=normalized.get("from_address") or "",
+        is_thread_reply=False,
+    )
+    return classifier_module.classify(payload, provider_config=provider_config)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -1410,6 +2004,220 @@ async def mail_folder_inventory(
     }
 
 
+def _resolve_target_account_email(
+    linked_email: str | None, requested_email: str | None
+) -> str:
+    """Pick which mailbox the operator request acts on.
+
+    Defaults to the signed-in session email when no explicit target is
+    given. When ``requested_email`` is provided it must match the session
+    email — operator routes never let one signed-in user trigger ingest
+    against an unrelated mailbox without going through Microsoft sign-in.
+    """
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+    if not requested_email:
+        return linked_email
+    if _normalize_id(requested_email) != _normalize_id(linked_email):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Account email does not match the signed-in session. "
+                "Sign in as the target account to run dry-run ingest against it."
+            ),
+        )
+    return linked_email
+
+
+@app.post("/mail/messages/ingest-dry-run")
+async def ingest_messages_dry_run(
+    limit: int = Query(default=INGEST_DRYRUN_DEFAULT_LIMIT, ge=1, le=INGEST_DRYRUN_MAX_LIMIT),
+    email: str | None = Query(default=None),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Operator-triggered, non-destructive ingest + classify.
+
+    Fetches the most recent ``limit`` messages from the signed-in
+    Microsoft 365 account via ``GET /me/messages``, persists minimal
+    metadata, and writes one classification recommendation per message.
+
+    This endpoint does **not** move, send, delete, or change any folder.
+    The classifier runs deterministically; if the Azure OpenAI / Azure AI
+    provider is not configured, the run completes anyway and each
+    recommendation is marked ``provider_consulted=false``.
+
+    The optional ``email`` query parameter is informational and must
+    match the signed-in account; operator runs cannot target an
+    unrelated mailbox.
+    """
+    target_email = _resolve_target_account_email(linked_email, email)
+
+    access_token, account = await _graph_access_token_for_email(target_email)
+    account_id = account["account_id"]
+
+    provider_config = classifier_module.AzureAIProviderConfig.from_env()
+    run_id = _start_dryrun_run(
+        account_id=account_id,
+        triggered_by=target_email,
+        requested_limit=int(limit),
+        provider_consulted=False,
+        provider=provider_config.provider,
+    )
+
+    fetched_count = 0
+    classified_count = 0
+    forced_review_count = 0
+    error_count = 0
+    items: list[dict[str, Any]] = []
+    fetch_error: str | None = None
+
+    try:
+        try:
+            messages = await _list_recent_messages(access_token, int(limit))
+        except HTTPException as exc:
+            fetch_error = str(exc.detail)
+            raise
+
+        fetched_count = len(messages)
+
+        for message in messages:
+            error_text: str | None = None
+            decision: classifier_module.ClassificationDecision | None = None
+            persisted_id: str | None = None
+            normalized: dict[str, Any] | None = None
+            try:
+                persisted_id, normalized = _persist_message_metadata(account_id, message)
+                decision = _classify_message_for_dryrun(
+                    normalized, provider_config=provider_config
+                )
+            except HTTPException as exc:
+                error_text = str(exc.detail)
+            except Exception as exc:
+                error_text = str(exc)
+
+            if decision is None:
+                # Build a placeholder decision so we still log the failure
+                # against the message id (when we have one). Forced to
+                # 10 - Review by definition because we did not classify.
+                decision = classifier_module.ClassificationDecision(
+                    category="unknown_ambiguous",
+                    recommended_folder=classifier_module.REVIEW_FOLDER,
+                    confidence=0.0,
+                    confidence_band="low",
+                    reasons=("classifier_error: see error field",),
+                    safety_flags=("classifier_error",),
+                    forced_review=True,
+                    provider_consulted=False,
+                    provider=provider_config.provider,
+                )
+
+            status = "error" if error_text else "recommended"
+            if error_text:
+                error_count += 1
+            else:
+                classified_count += 1
+                if decision.forced_review:
+                    forced_review_count += 1
+
+            if persisted_id:
+                _persist_classification_recommendation(
+                    account_id=account_id,
+                    message_row_id=persisted_id,
+                    run_id=run_id,
+                    decision=decision,
+                    status=status,
+                    error=error_text,
+                )
+
+            items.append(
+                {
+                    "message": normalized
+                    or {
+                        "provider_message_id": message.get("id"),
+                        "subject": message.get("subject"),
+                    },
+                    "recommendation": decision.to_dict(),
+                    "status": status,
+                    "error": error_text,
+                }
+            )
+    except HTTPException as exc:
+        _finish_dryrun_run(
+            run_id=run_id,
+            fetched_count=fetched_count,
+            classified_count=classified_count,
+            forced_review_count=forced_review_count,
+            error_count=error_count + (1 if fetch_error else 0),
+            status="failed",
+            error=str(exc.detail),
+        )
+        raise
+
+    _finish_dryrun_run(
+        run_id=run_id,
+        fetched_count=fetched_count,
+        classified_count=classified_count,
+        forced_review_count=forced_review_count,
+        error_count=error_count,
+        status="completed",
+        error=None,
+    )
+
+    return {
+        "dry_run": True,
+        "non_destructive": True,
+        "run_id": run_id,
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "requested_limit": int(limit),
+        "totals": {
+            "fetched": fetched_count,
+            "classified": classified_count,
+            "forced_review": forced_review_count,
+            "errors": error_count,
+        },
+        "provider": {
+            "selected": provider_config.provider,
+            "configured": provider_config.is_configured(),
+            "consulted": False,
+        },
+        "review_folder": classifier_module.REVIEW_FOLDER,
+        "classifier_version": CLASSIFIER_VERSION,
+        "items": items,
+    }
+
+
+@app.get("/mail/messages/recommendations")
+async def list_message_recommendations(
+    limit: int = Query(default=50, ge=1, le=200),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Most recent classification recommendations for the signed-in account.
+
+    Powers the dashboard log: subject/sender/received_at, recommended
+    folder, confidence, forced_review, reasons/safety flags, and the
+    per-recommendation status/error.
+    """
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    account = _load_account_credentials(linked_email)
+    recommendations = _load_dryrun_recommendations(account["account_id"], limit=limit)
+    runs = _load_dryrun_runs(account["account_id"], limit=10)
+    return {
+        "account": {
+            "email": account["email"],
+            "display_name": account["display_name"],
+        },
+        "review_folder": classifier_module.REVIEW_FOLDER,
+        "classifier_version": CLASSIFIER_VERSION,
+        "recommendations": recommendations,
+        "recent_runs": runs,
+    }
+
+
 # =========================================================================
 # Operations dashboard
 # =========================================================================
@@ -1527,8 +2335,62 @@ def _empty_action_metrics() -> dict[str, Any]:
     }
 
 
+def _summarize_dryrun_classify(account_id: str) -> dict[str, Any]:
+    """Honestly summarize dry-run ingest activity for the dashboard.
+
+    Reports counts only when at least one run has occurred. Until then
+    we emit ``available: false`` so the UI can render a clear "no
+    dry-run runs yet" state instead of inventing a zero.
+    """
+    if not _database_url():
+        return {
+            "available": False,
+            "reason": (
+                "DATABASE_URL is not configured; dry-run ingest results are "
+                "not persisted."
+            ),
+            "runs": 0,
+            "messages_seen": 0,
+            "recommendations": 0,
+            "forced_review": 0,
+            "errors": 0,
+            "last_run_at": None,
+        }
+    runs = _load_dryrun_runs(account_id, limit=100)
+    if not runs:
+        return {
+            "available": False,
+            "reason": (
+                "No dry-run ingest runs have been recorded for this account yet. "
+                "Trigger one via POST /mail/messages/ingest-dry-run."
+            ),
+            "runs": 0,
+            "messages_seen": 0,
+            "recommendations": 0,
+            "forced_review": 0,
+            "errors": 0,
+            "last_run_at": None,
+        }
+    messages_seen = sum(int(r["fetched_count"] or 0) for r in runs)
+    recommendations = sum(int(r["classified_count"] or 0) for r in runs)
+    forced_review = sum(int(r["forced_review_count"] or 0) for r in runs)
+    errors = sum(int(r["error_count"] or 0) for r in runs)
+    last_run_at = runs[0]["started_at"] if runs else None
+    return {
+        "available": True,
+        "runs": len(runs),
+        "messages_seen": messages_seen,
+        "recommendations": recommendations,
+        "forced_review": forced_review,
+        "errors": errors,
+        "last_run_at": last_run_at,
+        "review_folder": classifier_module.REVIEW_FOLDER,
+    }
+
+
 def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
     folder_summary = _summarize_folder_inventory(account_row["account_id"])
+    dryrun_summary = _summarize_dryrun_classify(account_row["account_id"])
     return {
         "account": {
             "account_id": account_row["account_id"],
@@ -1544,6 +2406,7 @@ def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
         "folder_inventory": folder_summary,
         "email_volume": _empty_volume_metrics(),
         "action_activity": _empty_action_metrics(),
+        "dryrun_classify": dryrun_summary,
     }
 
 
@@ -1639,6 +2502,19 @@ def dashboard_summary(
                 },
                 "email_volume": _empty_volume_metrics(),
                 "action_activity": _empty_action_metrics(),
+                "dryrun_classify": {
+                    "available": False,
+                    "reason": (
+                        "No connected_account row for this session — dry-run "
+                        "classification log is not available."
+                    ),
+                    "runs": 0,
+                    "messages_seen": 0,
+                    "recommendations": 0,
+                    "forced_review": 0,
+                    "errors": 0,
+                    "last_run_at": None,
+                },
             }
         ]
 
@@ -1684,10 +2560,9 @@ def dashboard_summary(
 # fabricated/example notices.
 
 PENDING_REASON_MESSAGE_MOVEMENT = (
-    "Message movement instrumentation is pending. The runtime does not yet "
-    "log per-message ingest/route/move events; once the connector worker "
-    "writes message_ingestion_event / mailbox_action rows, this feed will "
-    "include them."
+    "Message movement instrumentation is pending. No message has been moved "
+    "yet — DYC v1 is human-in-the-loop. Dry-run classification runs are "
+    "surfaced separately under classify_activity."
 )
 
 
@@ -1784,6 +2659,8 @@ def activity_log(
 
     folder_events: list[dict[str, Any]] = []
     folder_available = False
+    classify_events: list[dict[str, Any]] = []
+    classify_available = False
     for row in scoped_rows:
         events = _load_folder_activity(row["account_id"], limit=limit)
         for event in events:
@@ -1794,11 +2671,62 @@ def activity_log(
             folder_events.append(event)
         folder_available = True
 
+        # Surface dry-run classify activity per account: each recommendation
+        # is one event in the dashboard log so operators can see
+        # subject/sender/date, recommended folder, confidence, forced_review,
+        # reasons/safety_flags, and any per-message error.
+        recs = _load_dryrun_recommendations(row["account_id"], limit=limit)
+        for rec in recs:
+            message = rec.get("message") or {}
+            classify_events.append(
+                {
+                    "event_type": (
+                        "classify.error" if rec.get("status") == "error"
+                        else "classify.recommend"
+                    ),
+                    "occurred_at": rec.get("created_at"),
+                    "account": {
+                        "account_id": row["account_id"],
+                        "email": row["email"],
+                    },
+                    "run_id": rec.get("run_id"),
+                    "classifier_version": rec.get("classifier_version"),
+                    "category": rec.get("category"),
+                    "recommended_folder": rec.get("recommended_folder"),
+                    "confidence": rec.get("confidence"),
+                    "confidence_band": rec.get("confidence_band"),
+                    "forced_review": rec.get("forced_review"),
+                    "reasons": rec.get("reasons"),
+                    "safety_flags": rec.get("safety_flags"),
+                    "provider_consulted": rec.get("provider_consulted"),
+                    "provider": rec.get("provider"),
+                    "status": rec.get("status"),
+                    "error": rec.get("error"),
+                    "message": {
+                        "provider_message_id": message.get("provider_message_id"),
+                        "subject": message.get("subject"),
+                        "from_address": message.get("from_address"),
+                        "from_name": message.get("from_name"),
+                        "received_at": message.get("received_at"),
+                        "parent_folder_name": message.get("parent_folder_name"),
+                        "web_link": message.get("web_link"),
+                    },
+                }
+            )
+        if recs:
+            classify_available = True
+
     folder_events.sort(
         key=lambda event: event.get("occurred_at") or "",
         reverse=True,
     )
     folder_events = folder_events[:limit]
+
+    classify_events.sort(
+        key=lambda event: event.get("occurred_at") or "",
+        reverse=True,
+    )
+    classify_events = classify_events[:limit]
 
     folder_reason: str | None = None
     if not folder_available:
@@ -1806,6 +2734,13 @@ def activity_log(
             "No connected_account rows for this session; folder activity "
             "becomes available once accounts are persisted via the OAuth "
             "callback with DATABASE_URL configured."
+        )
+
+    classify_reason: str | None = None
+    if not classify_available:
+        classify_reason = (
+            "No dry-run classification runs have been recorded yet. Trigger "
+            "one via POST /mail/messages/ingest-dry-run."
         )
 
     return {
@@ -1816,6 +2751,11 @@ def activity_log(
             "available": folder_available,
             "reason": folder_reason,
             "events": folder_events,
+        },
+        "classify_activity": {
+            "available": classify_available,
+            "reason": classify_reason,
+            "events": classify_events,
         },
         "message_movement": {
             "available": False,

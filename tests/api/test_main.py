@@ -2,6 +2,7 @@ import base64
 import json
 from urllib.parse import parse_qs, urlparse
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from apps.api.app import main
@@ -1059,6 +1060,8 @@ def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
         ("GET", "/accounts/daniel@danielyoung.io/dashboard"),
         ("GET", "/activity"),
         ("GET", "/alerts"),
+        ("POST", "/mail/messages/ingest-dry-run"),
+        ("GET", "/mail/messages/recommendations"),
     )
     for method, path in protected:
         response = test_client.request(method, path)
@@ -1705,3 +1708,554 @@ def test_alerts_returns_404_for_unknown_account_query(monkeypatch):
     )
 
     assert response.status_code == 404
+
+
+# =========================================================================
+# Dry-run ingest + classification
+# =========================================================================
+
+
+def _account_row(email: str = "daniel@danielyoung.io") -> dict:
+    return {
+        "account_id": "account-123",
+        "provider": main.MICROSOFT_PROVIDER,
+        "email": email,
+        "display_name": "Daniel Young",
+        "status": "active",
+        "has_refresh_token": True,
+        "token_updated_at": None,
+        "updated_at": None,
+        "created_at": None,
+    }
+
+
+def _credentials_row(email: str = "daniel@danielyoung.io") -> dict:
+    return {
+        "account_id": "account-123",
+        "provider_account_id": "graph-id",
+        "email": email,
+        "display_name": "Daniel Young",
+        "access_token": "stub-token",
+        "refresh_token": "stub-refresh",
+        "access_token_expires_at": None,
+    }
+
+
+def _stub_dryrun_persistence(monkeypatch):
+    """Stub database writes so ingest tests run without a real Postgres.
+
+    The stubs capture each call so tests can assert the exact subject /
+    sender / decision the operator endpoint would have logged.
+    """
+    captured = {
+        "messages": [],
+        "recommendations": [],
+        "runs": [],
+        "run_finishes": [],
+    }
+
+    def fake_persist_message(account_id, message):
+        row_id = f"row-{len(captured['messages']) + 1}"
+        from_addr, from_name = main._extract_sender(message)
+        normalized = {
+            "id": row_id,
+            "provider_message_id": message.get("id"),
+            "provider_conversation_id": message.get("conversationId"),
+            "subject": message.get("subject") or "",
+            "from_address": from_addr,
+            "from_name": from_name,
+            "received_at": message.get("receivedDateTime"),
+            "is_unread": not bool(message.get("isRead")),
+            "parent_folder_id": message.get("parentFolderId"),
+            "parent_folder_name": None,
+            "body_preview": message.get("bodyPreview") or "",
+            "web_link": message.get("webLink"),
+        }
+        captured["messages"].append((account_id, normalized))
+        return row_id, normalized
+
+    def fake_persist_recommendation(**kwargs):
+        captured["recommendations"].append(kwargs)
+        return f"rec-{len(captured['recommendations'])}"
+
+    def fake_start_run(**kwargs):
+        captured["runs"].append(kwargs)
+        return "run-1"
+
+    def fake_finish_run(**kwargs):
+        captured["run_finishes"].append(kwargs)
+
+    monkeypatch.setattr(main, "_persist_message_metadata", fake_persist_message)
+    monkeypatch.setattr(
+        main, "_persist_classification_recommendation", fake_persist_recommendation
+    )
+    monkeypatch.setattr(main, "_start_dryrun_run", fake_start_run)
+    monkeypatch.setattr(main, "_finish_dryrun_run", fake_finish_run)
+    return captured
+
+
+def test_ingest_dry_run_classifies_batch_without_provider(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    # Provider env vars deliberately unset → deterministic-only path.
+    for var in (
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_ENDPOINT",
+        "AZURE_AI_DEPLOYMENT",
+        "AZURE_AI_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    async def fake_token(email):
+        assert email == "daniel@danielyoung.io"
+        return "stub-access", _credentials_row()
+
+    async def fake_list_messages(access_token, limit):
+        assert access_token == "stub-access"
+        assert limit == 3
+        return [
+            {
+                "id": "AAMkA-1",
+                "conversationId": "convo-1",
+                "subject": "Quarterly newsletter",
+                "from": {"emailAddress": {"address": "news@example.com", "name": "News"}},
+                "receivedDateTime": "2026-04-28T08:00:00Z",
+                "isRead": False,
+                "bodyPreview": (
+                    "This is a fairly long newsletter body, more than forty characters."
+                ),
+                "parentFolderId": "inbox",
+                "webLink": "https://outlook.office.com/?i=1",
+            },
+            {
+                "id": "AAMkA-2",
+                "subject": "Short ping",
+                "from": {"emailAddress": {"address": "friend@example.com", "name": "Friend"}},
+                "receivedDateTime": "2026-04-28T07:00:00Z",
+                "isRead": True,
+                "bodyPreview": "ok",
+                "parentFolderId": "inbox",
+                "webLink": "https://outlook.office.com/?i=2",
+            },
+            {
+                "id": "AAMkA-3",
+                "subject": "Patient followup notes",
+                "from": {"emailAddress": {"address": "doctor@example.com"}},
+                "receivedDateTime": "2026-04-28T06:00:00Z",
+                "isRead": True,
+                "bodyPreview": "Please review the attached patient file before next week.",
+                "parentFolderId": "inbox",
+                "webLink": "https://outlook.office.com/?i=3",
+            },
+        ]
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", fake_list_messages)
+    captured = _stub_dryrun_persistence(monkeypatch)
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/ingest-dry-run?limit=3&email=daniel@danielyoung.io",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run"] is True
+    assert payload["non_destructive"] is True
+    assert payload["account"]["email"] == "daniel@danielyoung.io"
+    assert payload["totals"]["fetched"] == 3
+    assert payload["totals"]["classified"] == 3
+    # Short ping (body too short) and patient followup (sensitive content) → forced review.
+    # Newsletter has no rule_category so confidence stays at 0 and is also forced review.
+    assert payload["totals"]["forced_review"] == 3
+    assert payload["totals"]["errors"] == 0
+    assert payload["provider"]["consulted"] is False
+    assert payload["provider"]["configured"] is False
+    assert payload["review_folder"] == "10 - Review"
+
+    items = payload["items"]
+    assert {item["recommendation"]["recommended_folder"] for item in items} == {"10 - Review"}
+    short = next(it for it in items if it["message"]["subject"] == "Short ping")
+    assert "short_without_context" in short["recommendation"]["safety_flags"]
+    sensitive = next(it for it in items if it["message"]["subject"] == "Patient followup notes")
+    assert "sensitive_content" in sensitive["recommendation"]["safety_flags"]
+
+    # Persistence audit trail: one run started, three message + recommendation rows,
+    # one run finished with the matching totals.
+    assert len(captured["runs"]) == 1
+    assert captured["runs"][0]["requested_limit"] == 3
+    assert captured["runs"][0]["triggered_by"] == "daniel@danielyoung.io"
+    assert len(captured["messages"]) == 3
+    assert len(captured["recommendations"]) == 3
+    assert len(captured["run_finishes"]) == 1
+    finish = captured["run_finishes"][0]
+    assert finish["fetched_count"] == 3
+    assert finish["classified_count"] == 3
+    assert finish["forced_review_count"] == 3
+    assert finish["status"] == "completed"
+    assert finish["error"] is None
+
+
+def test_ingest_dry_run_rejects_email_mismatch(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/ingest-dry-run?email=stranger@example.com",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 403
+    assert "does not match" in response.json()["detail"]
+
+
+def test_ingest_dry_run_marks_run_failed_on_graph_error(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        return "stub-access", _credentials_row()
+
+    async def fake_list_messages(access_token, limit):
+        raise HTTPException(status_code=502, detail="Microsoft Graph request failed")
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", fake_list_messages)
+    captured = _stub_dryrun_persistence(monkeypatch)
+    test_client = TestClient(main.app)
+
+    response = test_client.post(
+        "/mail/messages/ingest-dry-run?limit=5",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 502
+
+    # The run row was started, then finished with status=failed even though
+    # the request bubbled the error to the caller.
+    assert len(captured["runs"]) == 1
+    assert len(captured["run_finishes"]) == 1
+    finish = captured["run_finishes"][0]
+    assert finish["status"] == "failed"
+    assert finish["fetched_count"] == 0
+    assert finish["classified_count"] == 0
+
+
+def test_ingest_dry_run_records_classifier_failure_per_message(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        return "stub-access", _credentials_row()
+
+    async def fake_list_messages(access_token, limit):
+        return [
+            {
+                "id": "AAMkA-1",
+                "subject": "Healthy newsletter",
+                "from": {"emailAddress": {"address": "news@example.com"}},
+                "receivedDateTime": "2026-04-28T08:00:00Z",
+                "isRead": False,
+                "bodyPreview": "A reasonably long newsletter body for classification.",
+                "parentFolderId": "inbox",
+            },
+            {
+                "id": "AAMkA-2",
+                "subject": "Will fail",
+                "from": {"emailAddress": {"address": "x@example.com"}},
+                "receivedDateTime": "2026-04-28T07:00:00Z",
+                "isRead": True,
+                "bodyPreview": "doesn't matter",
+                "parentFolderId": "inbox",
+            },
+        ]
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", fake_list_messages)
+    captured = _stub_dryrun_persistence(monkeypatch)
+
+    real_classify = main._classify_message_for_dryrun
+
+    def selective_classify(normalized, *, provider_config):
+        if normalized.get("subject") == "Will fail":
+            raise RuntimeError("classifier blew up")
+        return real_classify(normalized, provider_config=provider_config)
+
+    monkeypatch.setattr(main, "_classify_message_for_dryrun", selective_classify)
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/ingest-dry-run?limit=2",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["totals"]["fetched"] == 2
+    assert payload["totals"]["classified"] == 1
+    assert payload["totals"]["errors"] == 1
+
+    error_item = next(it for it in payload["items"] if it["status"] == "error")
+    assert "classifier_error" in error_item["recommendation"]["safety_flags"]
+    assert error_item["recommendation"]["recommended_folder"] == "10 - Review"
+    assert error_item["error"] is not None
+    assert "classifier blew up" in error_item["error"]
+
+    # Both rows were logged (recommended + error). The run finished with the
+    # matching counts so the dashboard sees a complete audit trail.
+    assert len(captured["recommendations"]) == 2
+    finish = captured["run_finishes"][0]
+    assert finish["status"] == "completed"
+    assert finish["error_count"] == 1
+    assert finish["classified_count"] == 1
+
+
+def test_ingest_dry_run_does_not_call_graph_mutating_endpoints(monkeypatch):
+    """The dry-run path must never POST/PATCH/DELETE against Graph."""
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    async def fake_token(email):
+        return "stub-access", _credentials_row()
+
+    async def fake_list_messages(access_token, limit):
+        return [
+            {
+                "id": "AAMkA-1",
+                "subject": "News",
+                "from": {"emailAddress": {"address": "news@example.com"}},
+                "receivedDateTime": "2026-04-28T08:00:00Z",
+                "isRead": False,
+                "bodyPreview": "Long enough body for classification, definitely.",
+                "parentFolderId": "inbox",
+            }
+        ]
+
+    async def boom_post(access_token, path, payload):
+        raise AssertionError(f"Mutating Graph call attempted: POST {path}")
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_list_recent_messages", fake_list_messages)
+    monkeypatch.setattr(main, "_graph_post", boom_post)
+    _stub_dryrun_persistence(monkeypatch)
+
+    test_client = TestClient(main.app)
+    response = test_client.post(
+        "/mail/messages/ingest-dry-run?limit=1",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    assert response.json()["non_destructive"] is True
+
+
+def test_recommendations_endpoint_returns_persisted_log(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    monkeypatch.setattr(
+        main, "_load_account_credentials", lambda email: _credentials_row(email)
+    )
+
+    fake_recs = [
+        {
+            "recommendation_id": "rec-1",
+            "run_id": "run-1",
+            "classifier_version": main.CLASSIFIER_VERSION,
+            "category": "newsletters_news",
+            "recommended_folder": "10 - Review",
+            "confidence": 0.0,
+            "confidence_band": "low",
+            "forced_review": True,
+            "reasons": ["confidence below medium threshold — defaulting to 10 - Review"],
+            "safety_flags": [],
+            "provider_consulted": False,
+            "provider": "none",
+            "status": "recommended",
+            "error": None,
+            "created_at": "2026-04-28T09:00:00+00:00",
+            "message": {
+                "id": "msg-1",
+                "provider_message_id": "AAMkA-1",
+                "subject": "Hello",
+                "from_address": "news@example.com",
+                "from_name": "News",
+                "received_at": "2026-04-28T08:00:00+00:00",
+                "parent_folder_name": "Inbox",
+                "web_link": "https://outlook.office.com/?i=1",
+            },
+        }
+    ]
+    fake_runs = [
+        {
+            "run_id": "run-1",
+            "triggered_by": "daniel@danielyoung.io",
+            "requested_limit": 10,
+            "fetched_count": 1,
+            "classified_count": 1,
+            "forced_review_count": 1,
+            "error_count": 0,
+            "provider_consulted": False,
+            "provider": "none",
+            "status": "completed",
+            "error": None,
+            "started_at": "2026-04-28T09:00:00+00:00",
+            "finished_at": "2026-04-28T09:00:01+00:00",
+        }
+    ]
+
+    monkeypatch.setattr(main, "_load_dryrun_recommendations", lambda account_id, limit: fake_recs)
+    monkeypatch.setattr(main, "_load_dryrun_runs", lambda account_id, limit: fake_runs)
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/mail/messages/recommendations",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account"]["email"] == "daniel@danielyoung.io"
+    assert body["review_folder"] == "10 - Review"
+    assert body["recommendations"][0]["message"]["subject"] == "Hello"
+    assert body["recent_runs"][0]["run_id"] == "run-1"
+
+
+def test_activity_includes_classify_events(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+    monkeypatch.setattr(main, "_load_folder_activity", lambda account_id, limit: [])
+    monkeypatch.setattr(
+        main,
+        "_load_dryrun_recommendations",
+        lambda account_id, limit: [
+            {
+                "recommendation_id": "rec-1",
+                "run_id": "run-1",
+                "classifier_version": main.CLASSIFIER_VERSION,
+                "category": "unknown_ambiguous",
+                "recommended_folder": "10 - Review",
+                "confidence": 0.0,
+                "confidence_band": "low",
+                "forced_review": True,
+                "reasons": ["confidence below medium threshold — defaulting to 10 - Review"],
+                "safety_flags": [],
+                "provider_consulted": False,
+                "provider": "none",
+                "status": "recommended",
+                "error": None,
+                "created_at": "2026-04-28T09:00:00+00:00",
+                "message": {
+                    "id": "msg-1",
+                    "provider_message_id": "AAMkA-1",
+                    "subject": "Quarterly digest",
+                    "from_address": "news@example.com",
+                    "from_name": "News",
+                    "received_at": "2026-04-28T08:00:00+00:00",
+                    "parent_folder_name": "Inbox",
+                    "web_link": "https://outlook.office.com/?i=1",
+                },
+            }
+        ],
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["classify_activity"]["available"] is True
+    events = payload["classify_activity"]["events"]
+    assert len(events) == 1
+    event = events[0]
+    assert event["event_type"] == "classify.recommend"
+    assert event["recommended_folder"] == "10 - Review"
+    assert event["forced_review"] is True
+    assert event["message"]["subject"] == "Quarterly digest"
+    assert event["account"]["email"] == "daniel@danielyoung.io"
+
+
+def test_activity_classify_empty_when_no_recs(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+    monkeypatch.setattr(main, "_load_folder_activity", lambda account_id, limit: [])
+    monkeypatch.setattr(main, "_load_dryrun_recommendations", lambda account_id, limit: [])
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["classify_activity"]["available"] is False
+    assert "POST /mail/messages/ingest-dry-run" in payload["classify_activity"]["reason"]
+    assert payload["classify_activity"]["events"] == []
+
+
+def test_dashboard_summary_surfaces_dryrun_classify(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+    monkeypatch.setattr(main, "_load_folder_inventory", lambda account_id: [])
+    # Pretend DATABASE_URL is set so _summarize_dryrun_classify queries.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setattr(
+        main,
+        "_load_dryrun_runs",
+        lambda account_id, limit: [
+            {
+                "run_id": "run-1",
+                "triggered_by": "daniel@danielyoung.io",
+                "requested_limit": 10,
+                "fetched_count": 7,
+                "classified_count": 6,
+                "forced_review_count": 4,
+                "error_count": 1,
+                "provider_consulted": False,
+                "provider": "none",
+                "status": "completed",
+                "error": None,
+                "started_at": "2026-04-28T09:00:00+00:00",
+                "finished_at": "2026-04-28T09:00:02+00:00",
+            }
+        ],
+    )
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/dashboard/summary",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    dryrun = payload["accounts"][0]["dryrun_classify"]
+    assert dryrun["available"] is True
+    assert dryrun["runs"] == 1
+    assert dryrun["messages_seen"] == 7
+    assert dryrun["recommendations"] == 6
+    assert dryrun["forced_review"] == 4
+    assert dryrun["errors"] == 1
+    assert dryrun["last_run_at"] == "2026-04-28T09:00:00+00:00"
+    assert dryrun["review_folder"] == "10 - Review"
+
+
+def test_dashboard_summary_dryrun_not_available_when_no_runs(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+    monkeypatch.setattr(main, "_load_folder_inventory", lambda account_id: [])
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setattr(main, "_load_dryrun_runs", lambda account_id, limit: [])
+
+    test_client = TestClient(main.app)
+    response = test_client.get(
+        "/dashboard/summary",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    dryrun = response.json()["accounts"][0]["dryrun_classify"]
+    assert dryrun["available"] is False
+    assert dryrun["runs"] == 0
+    assert "No dry-run ingest runs" in dryrun["reason"]
+
+
+def test_parse_graph_datetime_handles_z_suffix():
+    parsed = main._parse_graph_datetime("2026-04-28T08:00:00Z")
+    assert parsed is not None
+    assert parsed.year == 2026
+    assert parsed.tzinfo is not None
+    assert main._parse_graph_datetime(None) is None
+    assert main._parse_graph_datetime("not a date") is None

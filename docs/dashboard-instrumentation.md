@@ -85,6 +85,8 @@ callback and the folder-inventory sync flow:
 | `account.status` | `connected_account.status` |
 | `account.token_updated_at` / `account.updated_at` / `account.created_at` | `connected_account` timestamps |
 | `folder_inventory.*` | `mailbox_folder` rows aggregated per account, plus the `DEFAULT_MVP_FOLDER_SPECS` constant for the expected target count |
+| `dryrun_classify.*` | Aggregated from `dryrun_ingest_run` rows for the account; reports `available: false` until the first operator-triggered run |
+| `classify_activity` events on `/activity` | One event per row in `message_classification_recommendation`, joined to the source message metadata in `email_message_dryrun` |
 
 ## Pending instrumentation
 
