@@ -1190,3 +1190,164 @@ def test_alerts_clean_when_state_is_healthy(monkeypatch):
     assert "folder_inventory_missing" not in codes
     assert "folder_inventory_incomplete" not in codes
     assert "activity_instrumentation_pending" in codes
+
+
+def _two_account_rows(user_email):
+    return [
+        {
+            "account_id": "account-personal",
+            "provider": main.MICROSOFT_PROVIDER,
+            "email": user_email,
+            "display_name": "Daniel Young",
+            "status": "active",
+            "has_refresh_token": True,
+            "token_updated_at": None,
+            "updated_at": None,
+            "created_at": None,
+        },
+        {
+            "account_id": "account-dhw",
+            "provider": main.MICROSOFT_PROVIDER,
+            "email": "daniel.young@digitalhealthworks.com",
+            "display_name": "Daniel Young (DHW)",
+            "status": "active",
+            "has_refresh_token": True,
+            "token_updated_at": None,
+            "updated_at": None,
+            "created_at": None,
+        },
+    ]
+
+
+def test_activity_filters_by_account_query(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: _two_account_rows(email),
+    )
+
+    captured: list[str] = []
+
+    def fake_load_folder_activity(account_id, limit):
+        captured.append(account_id)
+        return [
+            {
+                "event_type": "folder.bootstrap",
+                "occurred_at": "2026-04-28T10:00:00+00:00",
+                "folder": {
+                    "provider_folder_id": f"{account_id}-folder",
+                    "display_name": "10 - Review",
+                    "canonical_name": "10 - Review",
+                    "ownership": "dyc_managed",
+                    "is_dyc_target": True,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(main, "_load_folder_activity", fake_load_folder_activity)
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/activity",
+        params={"account": "daniel.young@digitalhealthworks.com"},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"] == {"account": "daniel.young@digitalhealthworks.com"}
+    assert captured == ["account-dhw"]
+    assert all(
+        event["account"]["email"] == "daniel.young@digitalhealthworks.com"
+        for event in payload["folder_activity"]["events"]
+    )
+
+
+def test_activity_returns_404_for_unknown_account_query(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: _two_account_rows(email),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/activity",
+        params={"account": "stranger@example.com"},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_alerts_filters_by_account_query(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for var in (
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+
+    rows = _two_account_rows("daniel@danielyoung.io")
+    rows[0]["has_refresh_token"] = False  # personal mailbox unhealthy
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: rows)
+    monkeypatch.setattr(
+        main,
+        "_summarize_folder_inventory",
+        lambda account_id: {
+            "available": True,
+            "total_folders": len(main.DEFAULT_MVP_FOLDER_SPECS) + 1,
+            "dyc_target_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "by_ownership": {"dyc_managed": len(main.DEFAULT_MVP_FOLDER_SPECS)},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": True,
+        },
+    )
+    test_client = TestClient(main.app)
+
+    # Scoped to the healthy DHW mailbox: no mailbox-not-ready alert should appear.
+    response = test_client.get(
+        "/alerts",
+        params={"account": "daniel.young@digitalhealthworks.com"},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scope"] == {"account": "daniel.young@digitalhealthworks.com"}
+    codes = {item["code"] for item in payload["alerts"]}
+    assert "mailbox_access_not_ready" not in codes
+
+    # Scoped to the unhealthy personal mailbox: alert is present and references it.
+    response = test_client.get(
+        "/alerts",
+        params={"account": "daniel@danielyoung.io"},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    items = response.json()["alerts"]
+    not_ready = [item for item in items if item["code"] == "mailbox_access_not_ready"]
+    assert len(not_ready) == 1
+    assert not_ready[0]["context"]["email"] == "daniel@danielyoung.io"
+
+
+def test_alerts_returns_404_for_unknown_account_query(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: _two_account_rows(email),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        params={"account": "stranger@example.com"},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 404
