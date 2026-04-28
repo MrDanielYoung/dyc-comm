@@ -201,6 +201,44 @@ def test_microsoft_start_sets_state_and_pkce(monkeypatch):
     assert main.PKCE_COOKIE in response.cookies
 
 
+def test_microsoft_start_omits_login_hint_by_default(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get("/auth/microsoft/start", follow_redirects=False)
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert "login_hint" not in query
+
+
+def test_microsoft_start_propagates_login_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?login_hint=daniel.young@digitalhealthworks.com",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["login_hint"] == ["daniel.young@digitalhealthworks.com"]
+    assert query["prompt"] == ["select_account"]
+
+
 def test_microsoft_callback_redirects_to_web_on_success(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     persisted_profiles: list[dict[str, str]] = []
@@ -665,6 +703,8 @@ def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
         ("GET", "/accounts"),
         ("GET", "/dashboard/summary"),
         ("GET", "/accounts/daniel@danielyoung.io/dashboard"),
+        ("GET", "/activity"),
+        ("GET", "/alerts"),
     )
     for method, path in protected:
         response = test_client.request(method, path)
@@ -937,3 +977,216 @@ def test_cli_build_parser_dispatches_subcommands():
 
     auth_args = parser.parse_args(["auth-url"])
     assert auth_args.func is cli.cmd_auth_url
+
+
+def test_activity_returns_empty_when_no_accounts(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["folder_activity"]["available"] is False
+    assert payload["folder_activity"]["events"] == []
+    assert payload["message_movement"]["available"] is False
+    assert payload["message_movement"]["events"] == []
+    assert any(item["metric"] == "message_movement" for item in payload["pending_instrumentation"])
+
+
+def test_activity_includes_folder_events(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+
+    def fake_load_folder_activity(account_id, limit):
+        assert account_id == "account-123"
+        return [
+            {
+                "event_type": "folder.bootstrap",
+                "occurred_at": "2026-04-28T10:00:00+00:00",
+                "folder": {
+                    "provider_folder_id": "review-id",
+                    "display_name": "10 - Review",
+                    "canonical_name": "10 - Review",
+                    "ownership": "dyc_managed",
+                    "is_dyc_target": True,
+                },
+            },
+            {
+                "event_type": "folder.sync",
+                "occurred_at": "2026-04-27T09:00:00+00:00",
+                "folder": {
+                    "provider_folder_id": "wolt-id",
+                    "display_name": "Wolt",
+                    "canonical_name": "Wolt",
+                    "ownership": "legacy_rule",
+                    "is_dyc_target": False,
+                },
+            },
+        ]
+
+    monkeypatch.setattr(main, "_load_folder_activity", fake_load_folder_activity)
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["folder_activity"]["available"] is True
+    events = payload["folder_activity"]["events"]
+    assert len(events) == 2
+    assert events[0]["event_type"] == "folder.bootstrap"
+    assert events[0]["account"] == {
+        "account_id": "account-123",
+        "email": "daniel@danielyoung.io",
+    }
+    assert events[1]["folder"]["display_name"] == "Wolt"
+
+
+def test_alerts_flags_no_connected_accounts_and_runtime(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    for var, _ in main._RUNTIME_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    codes = {item["code"] for item in payload["alerts"]}
+    assert "runtime_config_missing" in codes
+    assert "mailbox_access_not_ready" in codes
+    assert "activity_instrumentation_pending" in codes
+    assert "database_unavailable" in codes
+    assert payload["counts"]["error"] >= 1
+
+
+def test_alerts_flags_folder_inventory_missing(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for var in (
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(main, "_load_folder_inventory", lambda account_id: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    codes = {item["code"] for item in response.json()["alerts"]}
+    assert "folder_inventory_missing" in codes
+    assert "no_connected_accounts" not in codes
+    assert "runtime_config_missing" not in codes
+
+
+def test_alerts_clean_when_state_is_healthy(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    for var in (
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+
+    def fake_summarize(account_id):
+        return {
+            "available": True,
+            "total_folders": len(main.DEFAULT_MVP_FOLDER_SPECS) + 5,
+            "dyc_target_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "by_ownership": {"dyc_managed": len(main.DEFAULT_MVP_FOLDER_SPECS)},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": True,
+        }
+
+    monkeypatch.setattr(main, "_summarize_folder_inventory", fake_summarize)
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    codes = {item["code"] for item in payload["alerts"]}
+    # The pending-instrumentation note is always present, but the active-state
+    # codes should all be absent when the system is fully configured.
+    assert "no_connected_accounts" not in codes
+    assert "mailbox_access_not_ready" not in codes
+    assert "runtime_config_missing" not in codes
+    assert "database_unavailable" not in codes
+    assert "folder_inventory_missing" not in codes
+    assert "folder_inventory_incomplete" not in codes
+    assert "activity_instrumentation_pending" in codes

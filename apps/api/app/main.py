@@ -142,11 +142,11 @@ def _code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
 
-def _authorize_url(state: str, code_challenge: str) -> str:
+def _authorize_url(state: str, code_challenge: str, login_hint: str | None = None) -> str:
     tenant_id = _require_env("MICROSOFT_ENTRA_TENANT_ID")
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
-    params = {
+    params: dict[str, str] = {
         "client_id": client_id,
         "response_type": "code",
         "redirect_uri": redirect_uri,
@@ -157,6 +157,8 @@ def _authorize_url(state: str, code_challenge: str) -> str:
         "code_challenge_method": "S256",
         "prompt": "select_account",
     }
+    if login_hint:
+        params["login_hint"] = login_hint
     return (
         f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize?"
         f"{urlencode(params)}"
@@ -940,10 +942,11 @@ def auth_session(
 
 
 @app.get("/auth/microsoft/start")
-def microsoft_start() -> Response:
+def microsoft_start(login_hint: str | None = Query(default=None)) -> Response:
     state = secrets.token_urlsafe(24)
     verifier = _code_verifier()
-    authorize_url = _authorize_url(state, _code_challenge(verifier))
+    hint = login_hint.strip() if login_hint else None
+    authorize_url = _authorize_url(state, _code_challenge(verifier), login_hint=hint or None)
     response = RedirectResponse(authorize_url, status_code=302)
     response.set_cookie(
         key=AUTH_COOKIE,
@@ -1366,6 +1369,309 @@ def dashboard_summary(
                 "reason": PENDING_REASON_ACTIONS,
             },
         ],
+    }
+
+
+# =========================================================================
+# Activity log and alerts
+# =========================================================================
+#
+# These endpoints expose only honestly-derivable signals. The activity log
+# surfaces folder-inventory changes (the only actions the runtime currently
+# performs); message movement instrumentation is reported as pending until
+# the connector worker lands. Alerts are computed from current state — no
+# fabricated/example notices.
+
+PENDING_REASON_MESSAGE_MOVEMENT = (
+    "Message movement instrumentation is pending. The runtime does not yet "
+    "log per-message ingest/route/move events; once the connector worker "
+    "writes message_ingestion_event / mailbox_action rows, this feed will "
+    "include them."
+)
+
+
+def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        provider_folder_id,
+                        display_name,
+                        canonical_name,
+                        ownership,
+                        is_dyc_target,
+                        created_at,
+                        updated_at
+                    FROM mailbox_folder
+                    WHERE account_id = %s
+                    ORDER BY GREATEST(updated_at, created_at) DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load mailbox folder activity from PostgreSQL.",
+        ) from exc
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        provider_folder_id = row[0]
+        display_name = row[1]
+        canonical_name = row[2]
+        ownership = row[3]
+        is_dyc_target = row[4]
+        created_at = row[5]
+        updated_at = row[6]
+        is_initial = (
+            updated_at is None
+            or created_at is None
+            or abs((updated_at - created_at).total_seconds()) < 1.0
+        )
+        timestamp = updated_at or created_at
+        events.append(
+            {
+                "event_type": "folder.bootstrap" if is_initial else "folder.sync",
+                "occurred_at": timestamp.isoformat() if timestamp else None,
+                "folder": {
+                    "provider_folder_id": provider_folder_id,
+                    "display_name": display_name,
+                    "canonical_name": canonical_name,
+                    "ownership": ownership,
+                    "is_dyc_target": bool(is_dyc_target),
+                },
+            }
+        )
+    return events
+
+
+@app.get("/activity")
+def activity_log(
+    limit: int = Query(default=25, ge=1, le=100),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+
+    folder_events: list[dict[str, Any]] = []
+    folder_available = False
+    for row in rows:
+        events = _load_folder_activity(row["account_id"], limit=limit)
+        for event in events:
+            event["account"] = {
+                "account_id": row["account_id"],
+                "email": row["email"],
+            }
+            folder_events.append(event)
+        folder_available = True
+
+    folder_events.sort(
+        key=lambda event: event.get("occurred_at") or "",
+        reverse=True,
+    )
+    folder_events = folder_events[:limit]
+
+    folder_reason: str | None = None
+    if not folder_available:
+        folder_reason = (
+            "No connected_account rows for this session; folder activity "
+            "becomes available once accounts are persisted via the OAuth "
+            "callback with DATABASE_URL configured."
+        )
+
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "user": {"email": user_email},
+        "folder_activity": {
+            "available": folder_available,
+            "reason": folder_reason,
+            "events": folder_events,
+        },
+        "message_movement": {
+            "available": False,
+            "reason": PENDING_REASON_MESSAGE_MOVEMENT,
+            "events": [],
+        },
+        "pending_instrumentation": [
+            {"metric": "message_movement", "reason": PENDING_REASON_MESSAGE_MOVEMENT},
+        ],
+    }
+
+
+def _compute_alerts(
+    accounts: list[dict[str, Any]],
+    runtime_present: bool,
+) -> list[dict[str, Any]]:
+    alerts: list[dict[str, Any]] = []
+
+    if not runtime_present:
+        alerts.append(
+            {
+                "code": "runtime_config_missing",
+                "severity": "error",
+                "message": (
+                    "One or more required runtime variables are missing on the API. "
+                    "Mailbox sign-in cannot complete until they are populated."
+                ),
+                "next_action": (
+                    "Open the API/Diagnostics tab and populate any variables marked "
+                    "missing in the runtime config check."
+                ),
+            }
+        )
+
+    if not accounts:
+        alerts.append(
+            {
+                "code": "no_connected_accounts",
+                "severity": "warning",
+                "message": "No Microsoft 365 accounts are connected to this user.",
+                "next_action": (
+                    "Use the Connect Microsoft 365 card on the Dashboard to link "
+                    "an account (e.g. daniel.young@digitalhealthworks.com)."
+                ),
+            }
+        )
+
+    for account in accounts:
+        if not account.get("mailbox_access_ready"):
+            alerts.append(
+                {
+                    "code": "mailbox_access_not_ready",
+                    "severity": "warning",
+                    "message": (
+                        f"Account {account.get('email')} is linked but mailbox "
+                        "access is not ready (no refresh token or session-only)."
+                    ),
+                    "next_action": (
+                        "Re-run Microsoft sign-in for this account so a refresh token is stored."
+                    ),
+                    "context": {"email": account.get("email")},
+                }
+            )
+
+    if not _database_url():
+        alerts.append(
+            {
+                "code": "database_unavailable",
+                "severity": "warning",
+                "message": (
+                    "DATABASE_URL is not configured; account and folder rows are "
+                    "not persisted. The dashboard is running in session-only mode."
+                ),
+                "next_action": (
+                    "Set DATABASE_URL on the API runtime so connected_account and "
+                    "mailbox_folder rows are written by the OAuth and inventory "
+                    "flows."
+                ),
+            }
+        )
+    else:
+        for account in accounts:
+            account_id = account.get("account_id")
+            if not account_id:
+                continue
+            inventory = _summarize_folder_inventory(account_id)
+            if (inventory.get("total_folders") or 0) == 0:
+                alerts.append(
+                    {
+                        "code": "folder_inventory_missing",
+                        "severity": "info",
+                        "message": (
+                            "No folder inventory has been synced for "
+                            f"{account.get('email')} yet."
+                        ),
+                        "next_action": (
+                            "Run Bootstrap or Inventory Sync from the API/Diagnostics "
+                            "tab to populate mailbox_folder rows."
+                        ),
+                        "context": {"email": account.get("email")},
+                    }
+                )
+            elif not inventory.get("is_bootstrapped"):
+                alerts.append(
+                    {
+                        "code": "folder_inventory_incomplete",
+                        "severity": "info",
+                        "message": (
+                            f"{account.get('email')} is missing one or more "
+                            "default DYC-managed folders."
+                        ),
+                        "next_action": (
+                            "Run Bootstrap from the API/Diagnostics tab to create "
+                            "the missing default folders."
+                        ),
+                        "context": {"email": account.get("email")},
+                    }
+                )
+
+    alerts.append(
+        {
+            "code": "activity_instrumentation_pending",
+            "severity": "info",
+            "message": (
+                "Per-message activity (ingest, route, move) is not yet logged. "
+                "The Activity Log shows folder bootstrap/sync events only."
+            ),
+            "next_action": (
+                "Track follow-on work in docs/dashboard-instrumentation.md → "
+                "pending instrumentation."
+            ),
+        }
+    )
+
+    return alerts
+
+
+@app.get("/alerts")
+def alerts(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    if rows:
+        accounts = [
+            {
+                "account_id": row["account_id"],
+                "email": row["email"],
+                "mailbox_access_ready": bool(row["has_refresh_token"]),
+            }
+            for row in rows
+        ]
+    else:
+        accounts = [
+            {
+                "account_id": None,
+                "email": user_email,
+                "mailbox_access_ready": False,
+            }
+        ]
+
+    runtime_present = all(
+        bool(os.getenv(name)) for name, _ in _RUNTIME_VARIABLES if name != "KEY_VAULT_REFS_ENABLED"
+    )
+
+    items = _compute_alerts(accounts, runtime_present)
+    counts = {"error": 0, "warning": 0, "info": 0}
+    for item in items:
+        severity = item.get("severity", "info")
+        counts[severity] = counts.get(severity, 0) + 1
+
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "user": {"email": user_email},
+        "counts": counts,
+        "alerts": items,
     }
 
 

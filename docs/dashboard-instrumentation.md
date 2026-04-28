@@ -139,6 +139,39 @@ Required runtime work:
 - Add a query that counts `mailbox_action.status` per account over the
   trailing window plus `MAX(executed_at)` for "last action".
 
+## Activity log and alerts (this slice)
+
+The web UI now ships four tabs: **Dashboard**, **Activity Log**, **Alerts**,
+and **API / Diagnostics**. Two new authenticated endpoints back the new tabs:
+
+### `GET /activity`
+
+Returns folder bootstrap / inventory-sync events derived from `mailbox_folder`
+rows (the only actions the runtime currently performs). Per-message movement
+events are returned as `available: false` with an explicit `reason`, plus a
+`pending_instrumentation` block, until the connector worker writes
+`message_ingestion_event` / `mailbox_action` rows. The folder feed
+distinguishes `folder.bootstrap` (created in this run) from `folder.sync`
+(updated later) using the row's `created_at` vs `updated_at` timestamps.
+
+### `GET /alerts`
+
+Computes notices from current state — never fabricated or example items.
+Each entry has a stable `code`, a `severity` (`error` / `warning` / `info`),
+a human-readable `message`, and a `next_action`. Codes currently emitted:
+
+| Code | When |
+|---|---|
+| `runtime_config_missing` | Any required runtime variable is absent |
+| `no_connected_accounts` | `connected_account` list is empty for this user |
+| `mailbox_access_not_ready` | Linked account has no refresh token |
+| `database_unavailable` | `DATABASE_URL` is unset (session-only mode) |
+| `folder_inventory_missing` | Persisted account has no `mailbox_folder` rows |
+| `folder_inventory_incomplete` | Inventory exists but is missing default DYC folders |
+| `activity_instrumentation_pending` | Always present until message-movement instrumentation lands |
+
+The Alerts tab badge in the web UI counts the entries returned here.
+
 ## Multi-account next slice (DHW account)
 
 The data model already supports multiple `connected_account` rows per
@@ -149,15 +182,25 @@ session rather than add a sibling account.
 
 To honestly add the DHW account:
 
-1. Decide whether `app_user` is "the platform operator" (one row) and DHW
+1. Click **Connect daniel.young@digitalhealthworks.com** on the Dashboard
+   tab. The web UI sends `login_hint=daniel.young@digitalhealthworks.com`
+   to `GET /auth/microsoft/start`, which forwards it to Microsoft's
+   `/oauth2/v2.0/authorize` so the picker is pre-filled. The existing
+   `prompt=select_account` is preserved, so a different account can still
+   be picked.
+2. Decide whether `app_user` is "the platform operator" (one row) and DHW
    is a second `connected_account` under the same user, or whether the DHW
-   mailbox should belong to its own `app_user`.
-2. Update `_persist_microsoft_account` so a second OAuth login under a
+   mailbox should belong to its own `app_user`. **Open follow-up:** the
+   current `microsoft_callback` overwrites the session cookies with the
+   most recently signed-in identity, so connecting DHW today replaces the
+   existing session rather than adding a sibling account. Until that's
+   fixed, DHW connect is exercised one account at a time.
+3. Update `_persist_microsoft_account` so a second OAuth login under a
    different Graph `id` upserts a new `connected_account` row instead of
    replacing the existing session cookie's view.
-3. Add an account picker (or a `linked_account_id` cookie) to the web UI
+4. Add an account picker (or a `linked_account_id` cookie) to the web UI
    so per-account dashboards can be selected.
-4. Re-run the folder inventory sync against the DHW account.
+5. Re-run the folder inventory sync against the DHW account.
 
 The `/accounts` endpoint already returns every row, so the dashboard UI
 will pick up the second account automatically once the persistence side
@@ -171,6 +214,15 @@ Tests for the new endpoints live in `tests/api/test_main.py` and cover:
 - Session-only fallback when no DB persistence is configured.
 - Aggregation of folder inventory when persisted rows are returned.
 - 404 for `/accounts/{email}/dashboard` when the email is not linked.
+- `/auth/microsoft/start` omits `login_hint` by default and forwards the
+  query value when one is supplied.
+- `/activity` returns an empty available-flagged feed when no accounts are
+  persisted, and surfaces folder events with `event_type` and `account`
+  metadata when activity is loaded.
+- `/alerts` flags `runtime_config_missing`, `no_connected_accounts`,
+  `mailbox_access_not_ready`, `database_unavailable`,
+  `folder_inventory_missing`, and the always-on
+  `activity_instrumentation_pending` entry.
 
 The protected-endpoints sweep in `test_protected_mailbox_endpoints_reject_unauthenticated_calls`
-includes the three new dashboard URLs.
+includes `/activity` and `/alerts` alongside the three dashboard URLs.

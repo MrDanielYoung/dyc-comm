@@ -698,6 +698,151 @@
         }
       }
 
+      .tablist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 4px 14px rgba(20, 22, 27, 0.03);
+      }
+
+      .tab {
+        appearance: none;
+        min-height: 36px;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-weight: 600;
+        font-size: 0.85rem;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .tab[aria-selected="true"] {
+        background: rgba(74, 131, 197, 0.10);
+        color: var(--accent-deep);
+        border-color: rgba(74, 131, 197, 0.18);
+      }
+
+      .tab .tab-badge {
+        margin-left: 8px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        background: var(--danger);
+        color: #fff;
+        font-size: 0.66rem;
+        font-weight: 700;
+      }
+
+      .tab .tab-badge.warning {
+        background: var(--warning);
+      }
+
+      .tab .tab-badge.info {
+        background: var(--accent);
+      }
+
+      .tabpanels > [role="tabpanel"][hidden] {
+        display: none !important;
+      }
+
+      .activity-list,
+      .alerts-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .activity-row,
+      .alert-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid var(--line);
+      }
+
+      .alert-row.error {
+        border-color: rgba(181, 58, 44, 0.32);
+        background: rgba(181, 58, 44, 0.05);
+      }
+
+      .alert-row.warning {
+        border-color: rgba(143, 90, 18, 0.32);
+        background: rgba(143, 90, 18, 0.05);
+      }
+
+      .alert-row.info {
+        border-color: rgba(74, 131, 197, 0.32);
+        background: rgba(74, 131, 197, 0.05);
+      }
+
+      .alert-row .alert-message {
+        font-size: 0.9rem;
+        font-weight: 500;
+        margin: 0 0 4px;
+      }
+
+      .alert-row .alert-next {
+        margin: 0;
+        font-size: 0.78rem;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .activity-row .activity-when {
+        margin: 0;
+        font-size: 0.74rem;
+        color: var(--muted);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .activity-row .activity-title {
+        margin: 4px 0 0;
+        font-size: 0.9rem;
+        font-weight: 500;
+      }
+
+      .activity-row .activity-account {
+        margin: 4px 0 0;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      .connect-account-card {
+        display: grid;
+        gap: 10px;
+        padding: 16px 18px;
+        border-radius: var(--radius-lg);
+        border: 1px dashed rgba(74, 131, 197, 0.42);
+        background: rgba(74, 131, 197, 0.04);
+      }
+
+      .connect-account-card h3 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .connect-account-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.45;
+      }
+
+      .connect-account-card .action-row {
+        margin-top: 4px;
+      }
+
       [hidden] {
         display: none !important;
       }
@@ -828,102 +973,248 @@
               </aside>
             </section>
 
-            <section class="panel section-panel dashboard-panel" data-testid="dashboard-panel">
-              <h2 class="section-title">Operations dashboard</h2>
-              <p class="empty-state">
-                Live operational signals per connected account. Metrics tagged
-                <span class="metric-tag pending">pending</span>
-                require ingestion or audit instrumentation that is not yet wired up;
-                they will stay empty until the connector pipeline lands.
-              </p>
-              <div class="dashboard-totals" id="dashboardTotals">
-                <div class="dashboard-tile">
-                  <p class="label">Connected accounts</p>
-                  <p class="value" id="totalAccounts">—</p>
-                </div>
-                <div class="dashboard-tile">
-                  <p class="label">Mailbox-ready</p>
-                  <p class="value" id="totalReady">—</p>
-                </div>
-                <div class="dashboard-tile">
-                  <p class="label">Folders tracked</p>
-                  <p class="value" id="totalFolders">—</p>
-                </div>
-                <div class="dashboard-tile">
-                  <p class="label">DYC-target folders</p>
-                  <p class="value" id="totalDycTargets">—</p>
-                </div>
-              </div>
-              <div id="dashboardAccountList">
-                <p class="empty-state">Loading dashboard…</p>
-              </div>
-            </section>
+            <div class="tablist" role="tablist" aria-label="Console sections">
+              <button
+                class="tab"
+                role="tab"
+                type="button"
+                id="tab-dashboard"
+                data-tab="dashboard"
+                aria-selected="true"
+                aria-controls="panel-dashboard"
+              >Dashboard</button>
+              <button
+                class="tab"
+                role="tab"
+                type="button"
+                id="tab-activity"
+                data-tab="activity"
+                aria-selected="false"
+                aria-controls="panel-activity"
+              >Activity Log</button>
+              <button
+                class="tab"
+                role="tab"
+                type="button"
+                id="tab-alerts"
+                data-tab="alerts"
+                aria-selected="false"
+                aria-controls="panel-alerts"
+              >Alerts <span class="tab-badge" id="alertsBadge" hidden>0</span></button>
+              <button
+                class="tab"
+                role="tab"
+                type="button"
+                id="tab-api"
+                data-tab="api"
+                aria-selected="false"
+                aria-controls="panel-api"
+              >API / Diagnostics</button>
+            </div>
 
-            <section class="section-grid">
-              <section class="panel section-panel">
-                <h2 class="section-title">Mailbox</h2>
-                <div class="folder-board">
-                  <div class="readiness-list">
-                    <div class="readiness-item">
-                      <span class="readiness-label">API reachability</span>
-                      <span class="readiness-value" id="apiReachability">Checking</span>
-                    </div>
-                    <div class="readiness-item">
-                      <span class="readiness-label">OAuth configuration</span>
-                      <span class="readiness-value" id="oauthReadiness">Checking</span>
-                    </div>
-                    <div class="readiness-item">
-                      <span class="readiness-label">Database connection</span>
-                      <span class="readiness-value" id="dbReadiness">Checking</span>
-                    </div>
-                  </div>
-                  <div class="folder-groups">
-                    <div class="folder-group">
-                      <h3>DYC folders</h3>
-                      <div class="folder-list" id="dycFolderList">
-                        <p class="empty-state">No DYC-managed folders loaded yet.</p>
+            <div class="tabpanels">
+              <section
+                role="tabpanel"
+                id="panel-dashboard"
+                aria-labelledby="tab-dashboard"
+              >
+                <div class="shell">
+                  <section class="panel section-panel" data-testid="connect-account-panel">
+                    <h2 class="section-title">Connect account</h2>
+                    <div class="connect-account-card">
+                      <h3>Connect Digital Health Works mailbox</h3>
+                      <p>
+                        Add <code>daniel.young@digitalhealthworks.com</code> as a second
+                        Microsoft 365 mailbox. The Microsoft sign-in page will be
+                        pre-filled with this address (you can still pick a different
+                        account on the picker).
+                      </p>
+                      <div class="action-row">
+                        <a
+                          class="button-link primary"
+                          id="connectDhwLink"
+                          data-testid="connect-dhw"
+                          href="#"
+                        >Connect daniel.young@digitalhealthworks.com</a>
+                        <a
+                          class="button-link secondary"
+                          id="connectGenericLink"
+                          href="#"
+                        >Connect a different account</a>
                       </div>
                     </div>
-                    <div class="folder-group">
-                      <h3>Legacy / other folders</h3>
-                      <div class="folder-list" id="otherFolderList">
-                        <p class="empty-state">No folder inventory loaded yet.</p>
+                  </section>
+
+                  <section
+                    class="panel section-panel dashboard-panel"
+                    data-testid="dashboard-panel"
+                  >
+                    <h2 class="section-title">Operations dashboard</h2>
+                    <p class="empty-state">
+                      Live operational signals per connected account. Metrics tagged
+                      <span class="metric-tag pending">pending</span>
+                      require ingestion or audit instrumentation that is not yet
+                      wired up; they will stay empty until the connector pipeline
+                      lands.
+                    </p>
+                    <div class="dashboard-totals" id="dashboardTotals">
+                      <div class="dashboard-tile">
+                        <p class="label">Connected accounts</p>
+                        <p class="value" id="totalAccounts">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Mailbox-ready</p>
+                        <p class="value" id="totalReady">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">Folders tracked</p>
+                        <p class="value" id="totalFolders">—</p>
+                      </div>
+                      <div class="dashboard-tile">
+                        <p class="label">DYC-target folders</p>
+                        <p class="value" id="totalDycTargets">—</p>
                       </div>
                     </div>
-                  </div>
+                    <div id="dashboardAccountList">
+                      <p class="empty-state">Loading dashboard…</p>
+                    </div>
+                  </section>
+
+                  <section class="panel section-panel">
+                    <h2 class="section-title">Mailbox folders</h2>
+                    <div class="folder-board">
+                      <div class="folder-groups">
+                        <div class="folder-group">
+                          <h3>DYC folders</h3>
+                          <div class="folder-list" id="dycFolderList">
+                            <p class="empty-state">No DYC-managed folders loaded yet.</p>
+                          </div>
+                        </div>
+                        <div class="folder-group">
+                          <h3>Legacy / other folders</h3>
+                          <div class="folder-list" id="otherFolderList">
+                            <p class="empty-state">No folder inventory loaded yet.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
                 </div>
               </section>
 
-              <section class="panel section-panel">
-                <h2 class="section-title">Actions</h2>
-                <div class="endpoint-actions">
-                  <button class="endpoint-button" id="sessionButton" type="button" disabled>
-                    <strong>Session</strong>
-                    <span>Fetch `/auth/session`</span>
-                  </button>
-                  <button class="endpoint-button" id="foldersButton" type="button" disabled>
-                    <strong>Folders</strong>
-                    <span>Fetch `/mail/folders`</span>
-                  </button>
-                  <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
-                    <strong>Inventory Sync</strong>
-                    <span>POST `/mail/folders/inventory/sync`</span>
-                  </button>
-                  <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
-                    <strong>Bootstrap</strong>
-                    <span>POST `/mail/folders/bootstrap`</span>
-                  </button>
+              <section
+                role="tabpanel"
+                id="panel-activity"
+                aria-labelledby="tab-activity"
+                hidden
+              >
+                <div class="shell">
+                  <section class="panel section-panel" data-testid="activity-panel">
+                    <h2 class="section-title">Activity log</h2>
+                    <p class="empty-state">
+                      Recent folder bootstrap / inventory-sync events. Per-message
+                      movement events are
+                      <span class="metric-tag pending">pending</span>
+                      until the connector worker is wired up — see API / Diagnostics.
+                    </p>
+                    <div class="action-row">
+                      <button class="secondary" id="activityRefresh" type="button">
+                        Refresh activity
+                      </button>
+                    </div>
+                    <div class="activity-list" id="activityList">
+                      <p class="empty-state">Loading activity…</p>
+                    </div>
+                    <h2 class="section-title">Message movement</h2>
+                    <p class="metric-reason" id="messageMovementReason">
+                      Pending instrumentation.
+                    </p>
+                  </section>
                 </div>
-                <div class="diagnostic-list" id="missingConfigList">
-                  <div class="diagnostic-row">
-                    <span class="diagnostic-name">Loading</span>
-                    <span class="diagnostic-state missing">Checking</span>
-                  </div>
-                </div>
-                <h2 class="section-title">Last response</h2>
-                <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
               </section>
-            </section>
+
+              <section
+                role="tabpanel"
+                id="panel-alerts"
+                aria-labelledby="tab-alerts"
+                hidden
+              >
+                <div class="shell">
+                  <section class="panel section-panel" data-testid="alerts-panel">
+                    <h2 class="section-title">Alerts &amp; notices</h2>
+                    <p class="empty-state">
+                      Computed from the current API state — no example or fabricated
+                      items.
+                    </p>
+                    <div class="action-row">
+                      <button class="secondary" id="alertsRefresh" type="button">
+                        Refresh alerts
+                      </button>
+                    </div>
+                    <div class="alerts-list" id="alertsList">
+                      <p class="empty-state">Loading alerts…</p>
+                    </div>
+                  </section>
+                </div>
+              </section>
+
+              <section
+                role="tabpanel"
+                id="panel-api"
+                aria-labelledby="tab-api"
+                hidden
+              >
+                <div class="shell">
+                  <section class="panel section-panel" data-testid="api-panel">
+                    <h2 class="section-title">Runtime readiness</h2>
+                    <div class="readiness-list">
+                      <div class="readiness-item">
+                        <span class="readiness-label">API reachability</span>
+                        <span class="readiness-value" id="apiReachability">Checking</span>
+                      </div>
+                      <div class="readiness-item">
+                        <span class="readiness-label">OAuth configuration</span>
+                        <span class="readiness-value" id="oauthReadiness">Checking</span>
+                      </div>
+                      <div class="readiness-item">
+                        <span class="readiness-label">Database connection</span>
+                        <span class="readiness-value" id="dbReadiness">Checking</span>
+                      </div>
+                    </div>
+                    <div class="diagnostic-list" id="missingConfigList">
+                      <div class="diagnostic-row">
+                        <span class="diagnostic-name">Loading</span>
+                        <span class="diagnostic-state missing">Checking</span>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="panel section-panel">
+                    <h2 class="section-title">Endpoint actions</h2>
+                    <div class="endpoint-actions">
+                      <button class="endpoint-button" id="sessionButton" type="button" disabled>
+                        <strong>Session</strong>
+                        <span>Fetch `/auth/session`</span>
+                      </button>
+                      <button class="endpoint-button" id="foldersButton" type="button" disabled>
+                        <strong>Folders</strong>
+                        <span>Fetch `/mail/folders`</span>
+                      </button>
+                      <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
+                        <strong>Inventory Sync</strong>
+                        <span>POST `/mail/folders/inventory/sync`</span>
+                      </button>
+                      <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
+                        <strong>Bootstrap</strong>
+                        <span>POST `/mail/folders/bootstrap`</span>
+                      </button>
+                    </div>
+                    <h2 class="section-title">Last response</h2>
+                    <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
+                  </section>
+                </div>
+              </section>
+            </div>
           </div>
         </div>
       </div>
@@ -949,6 +1240,8 @@
 
       const API_BASE = inferApiBase();
       const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+      const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
+      const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
 
       const gateView = document.getElementById("gateView");
       const gateChip = document.getElementById("gateChip");
@@ -987,10 +1280,27 @@
       const totalFolders = document.getElementById("totalFolders");
       const totalDycTargets = document.getElementById("totalDycTargets");
       const dashboardAccountList = document.getElementById("dashboardAccountList");
+      const connectDhwLink = document.getElementById("connectDhwLink");
+      const connectGenericLink = document.getElementById("connectGenericLink");
+      const activityList = document.getElementById("activityList");
+      const activityRefresh = document.getElementById("activityRefresh");
+      const messageMovementReason = document.getElementById("messageMovementReason");
+      const alertsList = document.getElementById("alertsList");
+      const alertsRefresh = document.getElementById("alertsRefresh");
+      const alertsBadge = document.getElementById("alertsBadge");
+      const tabButtons = Array.from(document.querySelectorAll(".tab[data-tab]"));
+      const tabPanels = {
+        dashboard: document.getElementById("panel-dashboard"),
+        activity: document.getElementById("panel-activity"),
+        alerts: document.getElementById("panel-alerts"),
+        api: document.getElementById("panel-api"),
+      };
 
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
       headerSignInLink.href = SIGN_IN_URL;
+      connectDhwLink.href = DHW_SIGN_IN_URL;
+      connectGenericLink.href = SIGN_IN_URL;
 
       function setHeaderUnauthenticated() {
         headerAccount.hidden = true;
@@ -1189,6 +1499,140 @@
         totalFolders.textContent = "—";
         totalDycTargets.textContent = "—";
         dashboardAccountList.innerHTML = `<p class="empty-state">Sign in to view the operations dashboard.</p>`;
+        if (activityList) {
+          activityList.innerHTML = `<p class="empty-state">Sign in to view recent activity.</p>`;
+        }
+        if (alertsList) {
+          alertsList.innerHTML = `<p class="empty-state">Sign in to view alerts.</p>`;
+        }
+        setAlertsBadge(0, "info");
+      }
+
+      function setAlertsBadge(count, severity) {
+        if (!alertsBadge) return;
+        if (!count) {
+          alertsBadge.hidden = true;
+          alertsBadge.textContent = "0";
+          alertsBadge.className = "tab-badge";
+          return;
+        }
+        alertsBadge.hidden = false;
+        alertsBadge.textContent = String(count);
+        alertsBadge.className = `tab-badge ${severity || "info"}`;
+      }
+
+      function activateTab(tabName) {
+        if (!tabPanels[tabName]) return;
+        tabButtons.forEach((button) => {
+          const isActive = button.dataset.tab === tabName;
+          button.setAttribute("aria-selected", isActive ? "true" : "false");
+        });
+        Object.entries(tabPanels).forEach(([name, panel]) => {
+          panel.hidden = name !== tabName;
+        });
+        if (tabName === "activity") {
+          loadActivity().catch(() => {});
+        } else if (tabName === "alerts") {
+          loadAlerts().catch(() => {});
+        }
+      }
+
+      tabButtons.forEach((button) => {
+        button.addEventListener("click", () => activateTab(button.dataset.tab));
+      });
+
+      function renderActivity(payload) {
+        if (!activityList) return;
+        const folder = payload && payload.folder_activity;
+        const events = (folder && folder.events) || [];
+        const movement = payload && payload.message_movement;
+        if (movement && movement.reason) {
+          messageMovementReason.textContent = movement.reason;
+        }
+        if (!events.length) {
+          const reason = (folder && folder.reason)
+            || "No folder activity yet — bootstrap or sync the inventory to populate this feed.";
+          activityList.innerHTML = `<p class="empty-state">${escapeHtml(reason)}</p>`;
+          return;
+        }
+        activityList.innerHTML = events.map((event) => {
+          const folderInfo = event.folder || {};
+          const account = event.account || {};
+          const eventType = event.event_type || "folder.event";
+          const tag = folderInfo.is_dyc_target ? "DYC target" : (folderInfo.ownership || "folder");
+          return `
+            <div class="activity-row">
+              <div>
+                <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(eventType)}</p>
+                <p class="activity-title">${escapeHtml(folderInfo.display_name || folderInfo.canonical_name || "Folder")}</p>
+                <p class="activity-account">${escapeHtml(account.email || "")}</p>
+              </div>
+              <span class="folder-entry-tag">${escapeHtml(tag)}</span>
+            </div>
+          `;
+        }).join("");
+      }
+
+      async function loadActivity() {
+        if (!activityList) return;
+        activityList.innerHTML = `<p class="empty-state">Loading activity…</p>`;
+        try {
+          const response = await fetch(`${API_BASE}/activity`, { credentials: "include" });
+          if (!response.ok) {
+            activityList.innerHTML =
+              `<p class="empty-state">Activity unavailable (${response.status}).</p>`;
+            return;
+          }
+          const payload = await response.json();
+          renderActivity(payload);
+        } catch (error) {
+          activityList.innerHTML =
+            `<p class="empty-state">Activity request failed: ${escapeHtml(error.message)}.</p>`;
+        }
+      }
+
+      function renderAlerts(payload) {
+        if (!alertsList) return;
+        const items = (payload && payload.alerts) || [];
+        if (!items.length) {
+          alertsList.innerHTML = `<p class="empty-state">No alerts.</p>`;
+          setAlertsBadge(0, "info");
+          return;
+        }
+        const counts = (payload && payload.counts) || {};
+        const total = (counts.error || 0) + (counts.warning || 0) + (counts.info || 0);
+        const severity = counts.error ? "error" : counts.warning ? "warning" : "info";
+        setAlertsBadge(total, severity === "error" ? "" : severity);
+        alertsList.innerHTML = items.map((item) => {
+          const sev = item.severity || "info";
+          return `
+            <div class="alert-row ${escapeHtml(sev)}">
+              <div>
+                <p class="alert-message">${escapeHtml(item.message || "")}</p>
+                <p class="alert-next">${escapeHtml(item.next_action || "")}</p>
+              </div>
+              <span class="metric-tag ${sev === "info" ? "live" : "pending"}">${escapeHtml(sev)}</span>
+            </div>
+          `;
+        }).join("");
+      }
+
+      async function loadAlerts() {
+        if (!alertsList) return;
+        alertsList.innerHTML = `<p class="empty-state">Loading alerts…</p>`;
+        try {
+          const response = await fetch(`${API_BASE}/alerts`, { credentials: "include" });
+          if (!response.ok) {
+            alertsList.innerHTML =
+              `<p class="empty-state">Alerts unavailable (${response.status}).</p>`;
+            return;
+          }
+          const payload = await response.json();
+          renderAlerts(payload);
+        } catch (error) {
+          alertsList.innerHTML =
+            `<p class="empty-state">Alerts request failed: ${escapeHtml(error.message)}.</p>`;
+        }
       }
 
       function renderDashboardAccount(entry) {
@@ -1366,6 +1810,9 @@
           dashboardAccountList.innerHTML =
             `<p class="empty-state">Dashboard request failed: ${escapeHtml(error.message)}.</p>`;
         }
+
+        // Alerts always load eagerly so the badge reflects current state.
+        loadAlerts().catch(() => {});
       }
 
       async function signOut() {
@@ -1417,6 +1864,12 @@
       gateRetryButton.addEventListener("click", () => evaluateSession({ initial: true }));
       refreshButton.addEventListener("click", () => evaluateSession({ initial: false }));
       headerSignOutButton.addEventListener("click", signOut);
+      if (activityRefresh) {
+        activityRefresh.addEventListener("click", () => loadActivity());
+      }
+      if (alertsRefresh) {
+        alertsRefresh.addEventListener("click", () => loadAlerts());
+      }
       sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
       foldersButton.addEventListener("click", async () => {
         const payload = await safeCallApi("Folders", "/mail/folders");
