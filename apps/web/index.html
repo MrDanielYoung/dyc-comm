@@ -1634,6 +1634,14 @@
                     <p class="metric-reason" id="dashboardSortingSummary" data-testid="dashboard-sorting-summary">
                       No inbox dry-run has been recorded for this account yet.
                     </p>
+                    <p
+                      class="metric-reason"
+                      id="dashboardSortingSetupNotice"
+                      data-testid="dashboard-sorting-setup-notice"
+                      hidden
+                    >
+                      Mailbox access is not ready for this account. Reconnect to enable Inbox Sorting.
+                    </p>
                     <div class="sorting-actions">
                       <button
                         class="primary"
@@ -1641,6 +1649,13 @@
                         id="dashboardSortingOpen"
                         data-testid="dashboard-sorting-open"
                       >Open inbox sorting</button>
+                      <a
+                        class="button-link primary"
+                        id="dashboardSortingReconnect"
+                        data-testid="dashboard-sorting-reconnect"
+                        href="#"
+                        hidden
+                      >Reconnect this account</a>
                     </div>
                   </section>
 
@@ -1698,6 +1713,27 @@
                         <strong>No messages are moved, sent, or deleted.</strong>
                         Unclear or low-confidence messages route to
                         <code>10 - Review</code> for a human decision.
+                      </span>
+                    </div>
+                    <div
+                      class="nondestructive-banner"
+                      id="sortingSetupNotice"
+                      data-testid="sorting-setup-notice"
+                      hidden
+                    >
+                      <span aria-hidden="true">&#9888;</span>
+                      <span>
+                        <strong>Account setup incomplete.</strong>
+                        Mailbox access is not ready for the selected account
+                        (no refresh token on file). Reconnect to finish setup
+                        before running Inbox Sorting.
+                        <a
+                          class="button-link primary"
+                          id="sortingReconnectLink"
+                          data-testid="sorting-reconnect"
+                          href="#"
+                          style="margin-left: 8px;"
+                        >Reconnect this account</a>
                       </span>
                     </div>
                     <div class="sorting-actions">
@@ -1999,11 +2035,64 @@
       const sortingTableBody = document.getElementById("sortingTableBody");
       const dashboardSortingSummary = document.getElementById("dashboardSortingSummary");
       const dashboardSortingOpen = document.getElementById("dashboardSortingOpen");
+      const dashboardSortingReconnect = document.getElementById("dashboardSortingReconnect");
+      const dashboardSortingSetupNotice = document.getElementById("dashboardSortingSetupNotice");
+      const sortingSetupNotice = document.getElementById("sortingSetupNotice");
+      const sortingReconnectLink = document.getElementById("sortingReconnectLink");
 
       const accountState = {
         connected: [],
         selectedEmail: null,
       };
+
+      function signInUrlForEmail(email) {
+        if (!email) return SIGN_IN_URL;
+        return `${SIGN_IN_URL}?login_hint=${encodeURIComponent(email)}`;
+      }
+
+      function selectedAccountEntry() {
+        const email = accountState.selectedEmail;
+        if (!email) return null;
+        return (accountState.connected || []).find(
+          (entry) => entry && entry.email === email
+        ) || null;
+      }
+
+      function selectedAccountIsMailboxReady() {
+        const entry = selectedAccountEntry();
+        return Boolean(entry && entry.mailbox_access_ready);
+      }
+
+      function applySortingReadinessUI() {
+        const entry = selectedAccountEntry();
+        const email = entry ? entry.email : null;
+        const ready = selectedAccountIsMailboxReady();
+        const hasSelection = Boolean(email);
+
+        if (sortingSetupNotice) {
+          sortingSetupNotice.hidden = !hasSelection || ready;
+        }
+        if (sortingReconnectLink) {
+          sortingReconnectLink.href = signInUrlForEmail(email);
+        }
+        if (sortingRunButton) {
+          sortingRunButton.disabled = !ready;
+        }
+        if (sortingRefreshButton) {
+          sortingRefreshButton.disabled = !hasSelection;
+        }
+
+        if (dashboardSortingSetupNotice) {
+          dashboardSortingSetupNotice.hidden = !hasSelection || ready;
+        }
+        if (dashboardSortingReconnect) {
+          dashboardSortingReconnect.hidden = !hasSelection || ready;
+          dashboardSortingReconnect.href = signInUrlForEmail(email);
+        }
+        if (dashboardSortingOpen) {
+          dashboardSortingOpen.hidden = hasSelection && !ready;
+        }
+      }
 
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
@@ -2235,6 +2324,7 @@
           accountNavConnect.hidden = true;
         }
         updateSelectedAccountLabels();
+        applySortingReadinessUI();
       }
 
       function updateSelectedAccountLabels() {
@@ -2310,6 +2400,7 @@
         if (accountState.selectedEmail === email) return;
         accountState.selectedEmail = email;
         renderAccountNav();
+        applySortingReadinessUI();
         // Reload all account-scoped views for the new selection.
         loadDashboard().catch((error) => {
           dashboardAccountList.innerHTML =
@@ -2337,6 +2428,7 @@
             accountState.selectedEmail = entries.length ? entries[0].email : null;
           }
           renderAccountNav();
+          applySortingReadinessUI();
           return payload;
         } catch (_error) {
           clearAccountNav();
@@ -2642,12 +2734,23 @@
 
       async function loadSortingLog() {
         if (!sortingTableBody) return null;
+        applySortingReadinessUI();
         const account = accountState.selectedEmail;
         if (!account) {
           renderSortingTable([]);
           renderSortingSummary(null);
           updateDashboardSortingSummary(null);
           setSortingStatus("Select a connected account to see its dry-run log.");
+          return null;
+        }
+        if (!selectedAccountIsMailboxReady()) {
+          renderSortingTable([]);
+          renderSortingSummary(null);
+          updateDashboardSortingSummary(null);
+          setSortingStatus(
+            `Mailbox access for ${account} is not ready. Reconnect this account to finish setup before running Inbox Sorting.`,
+            "error"
+          );
           return null;
         }
         setSortingStatus(`Loading dry-run log for ${account}…`);
@@ -2702,6 +2805,14 @@
             "Select a connected account before running the dry-run.",
             "error"
           );
+          return;
+        }
+        if (!selectedAccountIsMailboxReady()) {
+          setSortingStatus(
+            `Mailbox access for ${account} is not ready. Reconnect this account to finish setup before running Inbox Sorting.`,
+            "error"
+          );
+          applySortingReadinessUI();
           return;
         }
         const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 25;

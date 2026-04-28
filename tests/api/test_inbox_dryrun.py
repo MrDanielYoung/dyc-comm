@@ -393,3 +393,88 @@ def test_protected_inbox_dryrun_endpoints_listed_in_protection_table():
     ):
         response = client.request(method, path)
         assert response.status_code == 401, f"{method} {path} should require a session"
+
+
+def test_classify_inbox_dryrun_surfaces_setup_required_when_no_refresh_token(monkeypatch):
+    """If a linked account has no refresh token, the dry-run cannot fetch
+    inbox messages. The API must return 409 with an actionable message that
+    points the operator at re-running Microsoft sign-in. This is the
+    contract the web Sorting tab relies on when it shows the
+    "Reconnect this account" CTA for not-ready accounts.
+    """
+    monkeypatch.setattr(main, "settings", _local_settings())
+    _clear_ai_env(monkeypatch)
+    not_ready = _account_row()
+    not_ready["has_refresh_token"] = False
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [not_ready])
+
+    def fake_load_credentials(email):
+        return {
+            "account_id": "account-123",
+            "provider_account_id": "provider-id",
+            "email": email,
+            "display_name": "Daniel Young",
+            "access_token": None,
+            "refresh_token": None,
+            "access_token_expires_at": None,
+        }
+
+    monkeypatch.setattr(main, "_load_account_credentials", fake_load_credentials)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/classify-dryrun",
+        params={"account": "daniel@danielyoung.io", "limit": 5},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "refresh token" in detail.lower()
+    assert "sign-in" in detail.lower()
+
+
+def test_accounts_endpoint_reports_mailbox_access_ready_per_account(monkeypatch):
+    """The web nav reads `mailbox_access_ready` per account to decide whether
+    to show the "Reconnect this account" CTA. Pin the response shape so a
+    rename here doesn't silently turn the CTA off for not-ready accounts.
+    """
+    monkeypatch.setattr(main, "settings", _local_settings())
+
+    primary = {
+        "account_id": "account-primary",
+        "provider": main.MICROSOFT_PROVIDER,
+        "email": "daniel@danielyoung.io",
+        "display_name": "Daniel Young",
+        "status": "active",
+        "has_refresh_token": True,
+        "token_updated_at": None,
+        "updated_at": None,
+        "created_at": None,
+    }
+    secondary = {
+        "account_id": "account-dhw",
+        "provider": main.MICROSOFT_PROVIDER,
+        "email": "daniel.young@digitalhealthworks.com",
+        "display_name": "Daniel Young (DHW)",
+        "status": "active",
+        "has_refresh_token": False,
+        "token_updated_at": None,
+        "updated_at": None,
+        "created_at": None,
+    }
+
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [primary, secondary])
+    client = TestClient(main.app)
+    response = client.get(
+        "/accounts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    accounts_by_email = {entry["email"]: entry for entry in payload["accounts"]}
+    assert accounts_by_email["daniel@danielyoung.io"]["mailbox_access_ready"] is True
+    assert (
+        accounts_by_email["daniel.young@digitalhealthworks.com"]["mailbox_access_ready"]
+        is False
+    )
