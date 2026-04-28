@@ -693,6 +693,46 @@ def _ensure_account_tables() -> None:
                 ON mailbox_folder(account_id)
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inbox_dry_run_classification (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    account_email TEXT NOT NULL,
+                    provider_message_id TEXT NOT NULL,
+                    received_at TIMESTAMPTZ,
+                    sender TEXT,
+                    subject TEXT,
+                    current_folder TEXT,
+                    recommended_folder TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    confidence_band TEXT NOT NULL,
+                    forced_review BOOLEAN NOT NULL DEFAULT false,
+                    reasons TEXT[] NOT NULL DEFAULT '{}',
+                    safety_flags TEXT[] NOT NULL DEFAULT '{}',
+                    provider_consulted BOOLEAN NOT NULL DEFAULT false,
+                    provider_name TEXT,
+                    status TEXT NOT NULL DEFAULT 'classified',
+                    error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(account_id, provider_message_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_inbox_dry_run_account_received
+                ON inbox_dry_run_classification(account_id, received_at DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_inbox_dry_run_account_email_created
+                ON inbox_dry_run_classification(account_email, created_at DESC)
+                """
+            )
         connection.commit()
 
     _DB_BOOTSTRAPPED = True
@@ -2012,6 +2052,381 @@ def alerts(
         "scope": {"account": account} if account else {"account": None},
         "counts": counts,
         "alerts": items,
+    }
+
+
+# =========================================================================
+# Inbox dry-run classification
+# =========================================================================
+#
+# These endpoints fetch a small recent batch of inbox messages for an
+# allow-listed account, run them through the existing dry-run classifier
+# (apps.api.app.classifier), and persist the recommendation for operator
+# review. They do NOT move, delete, send, or otherwise mutate the mailbox.
+# Only the message metadata listed in the migration is stored — body
+# content is discarded after classification.
+
+INBOX_DRY_RUN_DEFAULT_LIMIT = 25
+INBOX_DRY_RUN_MAX_LIMIT = 100
+INBOX_DRY_RUN_BODY_PREVIEW_CHARS = 4000
+
+
+def _scope_account_to_session(rows: list[dict[str, Any]], requested_email: str) -> dict[str, Any]:
+    """Pick the connected_account row matching ``requested_email``.
+
+    Raises 404 if the requested email is not linked to this session. This
+    is the safety boundary that prevents an operator from running the
+    dry-run against an account they did not connect.
+    """
+    needle = requested_email.strip().lower()
+    if not needle:
+        raise HTTPException(status_code=400, detail="account email is required.")
+    target = next((row for row in rows if (row.get("email") or "").lower() == needle), None)
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail="No connected account with that email is linked to this session.",
+        )
+    return target
+
+
+async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, Any]]:
+    """Read-only fetch of the most recent inbox messages from Microsoft Graph.
+
+    Uses GET /me/mailFolders/inbox/messages with a small $top and $select
+    so we only request the metadata we will store. Never issues writes.
+    """
+    payload = await _graph_get(
+        access_token,
+        "/me/mailFolders/inbox/messages",
+        params={
+            "$top": str(limit),
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview",
+        },
+    )
+    return payload.get("value", [])
+
+
+def _coerce_received_at(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        # Graph returns ISO-8601 with a trailing Z; datetime.fromisoformat
+        # in 3.12 understands the 'Z' suffix when it is replaced with +00:00.
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _sender_email_from_graph(message: dict[str, Any]) -> str:
+    for key in ("from", "sender"):
+        block = message.get(key) or {}
+        addr = (block.get("emailAddress") or {}).get("address")
+        if addr:
+            return addr
+    return ""
+
+
+def _classification_input_from_message(
+    message: dict[str, Any],
+) -> classifier_module.ClassificationInput:
+    return classifier_module.ClassificationInput(
+        subject=str(message.get("subject") or ""),
+        body=str(message.get("bodyPreview") or "")[:INBOX_DRY_RUN_BODY_PREVIEW_CHARS],
+        sender=_sender_email_from_graph(message),
+        is_thread_reply=False,
+        rule_category=None,
+        rule_confidence=0.0,
+    )
+
+
+def _persist_dry_run_classification(
+    account_id: str,
+    account_email: str,
+    message: dict[str, Any],
+    decision: classifier_module.ClassificationDecision,
+    provider_cfg: classifier_module.AzureAIProviderConfig | None,
+    status: str,
+    error: str | None = None,
+) -> None:
+    if not _database_url():
+        return
+
+    psycopg = _psycopg()
+    _ensure_account_tables()
+
+    received_at = _coerce_received_at(message.get("receivedDateTime"))
+    provider_message_id = str(message.get("id") or "")
+    if not provider_message_id:
+        return
+
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO inbox_dry_run_classification (
+                        id,
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        received_at,
+                        sender,
+                        subject,
+                        current_folder,
+                        recommended_folder,
+                        category,
+                        confidence,
+                        confidence_band,
+                        forced_review,
+                        reasons,
+                        safety_flags,
+                        provider_consulted,
+                        provider_name,
+                        status,
+                        error
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (account_id, provider_message_id) DO UPDATE
+                    SET received_at = EXCLUDED.received_at,
+                        sender = EXCLUDED.sender,
+                        subject = EXCLUDED.subject,
+                        current_folder = EXCLUDED.current_folder,
+                        recommended_folder = EXCLUDED.recommended_folder,
+                        category = EXCLUDED.category,
+                        confidence = EXCLUDED.confidence,
+                        confidence_band = EXCLUDED.confidence_band,
+                        forced_review = EXCLUDED.forced_review,
+                        reasons = EXCLUDED.reasons,
+                        safety_flags = EXCLUDED.safety_flags,
+                        provider_consulted = EXCLUDED.provider_consulted,
+                        provider_name = EXCLUDED.provider_name,
+                        status = EXCLUDED.status,
+                        error = EXCLUDED.error,
+                        created_at = now()
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        received_at,
+                        _sender_email_from_graph(message),
+                        str(message.get("subject") or ""),
+                        message.get("parentFolderId"),
+                        decision.recommended_folder,
+                        decision.category,
+                        float(decision.confidence),
+                        decision.confidence_band,
+                        bool(decision.forced_review),
+                        list(decision.reasons),
+                        list(decision.safety_flags),
+                        bool(decision.provider_consulted),
+                        provider_cfg.provider if provider_cfg else None,
+                        status,
+                        error,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist inbox dry-run classification to PostgreSQL.",
+        ) from exc
+
+
+def _load_dry_run_log(account_id: str, limit: int) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        provider_message_id,
+                        account_email,
+                        received_at,
+                        sender,
+                        subject,
+                        current_folder,
+                        recommended_folder,
+                        category,
+                        confidence,
+                        confidence_band,
+                        forced_review,
+                        reasons,
+                        safety_flags,
+                        provider_consulted,
+                        provider_name,
+                        status,
+                        error,
+                        created_at
+                    FROM inbox_dry_run_classification
+                    WHERE account_id = %s
+                    ORDER BY COALESCE(received_at, created_at) DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load inbox dry-run classification log from PostgreSQL.",
+        ) from exc
+
+    return [
+        {
+            "provider_message_id": row[0],
+            "account_email": row[1],
+            "received_at": row[2].isoformat() if row[2] else None,
+            "sender": row[3],
+            "subject": row[4],
+            "current_folder": row[5],
+            "recommended_folder": row[6],
+            "category": row[7],
+            "confidence": float(row[8]) if row[8] is not None else 0.0,
+            "confidence_band": row[9],
+            "forced_review": bool(row[10]),
+            "reasons": list(row[11] or []),
+            "safety_flags": list(row[12] or []),
+            "provider_consulted": bool(row[13]),
+            "provider": row[14],
+            "status": row[15],
+            "error": row[16],
+            "created_at": row[17].isoformat() if row[17] else None,
+        }
+        for row in rows
+    ]
+
+
+@app.post("/mail/inbox/classify-dryrun")
+async def classify_inbox_dryrun(
+    account: str = Query(..., description="Connected account email to scan."),
+    limit: int = Query(
+        default=INBOX_DRY_RUN_DEFAULT_LIMIT,
+        ge=1,
+        le=INBOX_DRY_RUN_MAX_LIMIT,
+        description="Maximum number of recent inbox messages to classify.",
+    ),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Fetch a small recent inbox batch and produce dry-run classifications.
+
+    Strictly read-only against Microsoft Graph (GET /me/mailFolders/inbox/
+    messages with $top + $select). The classifier itself does not call any
+    AI provider in this slice — when Azure OpenAI / Azure AI is not
+    configured, results are marked ``provider_not_consulted`` and the
+    deterministic fallback's recommendation is used. ``10 - Review`` is
+    the fallback folder for any unclear/sensitive/low-confidence message.
+    """
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    target = _scope_account_to_session(rows, account)
+
+    access_token, account_record = await _graph_access_token_for_email(target["email"])
+    messages = await _list_inbox_messages(access_token, limit=limit)
+
+    provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
+
+    results: list[dict[str, Any]] = []
+    for message in messages:
+        try:
+            ci = _classification_input_from_message(message)
+            decision = classifier_module.classify(ci, provider_config=provider_cfg)
+            _persist_dry_run_classification(
+                account_id=account_record["account_id"],
+                account_email=account_record["email"],
+                message=message,
+                decision=decision,
+                provider_cfg=provider_cfg,
+                status="classified",
+            )
+            results.append(
+                {
+                    "provider_message_id": message.get("id"),
+                    "received_at": message.get("receivedDateTime"),
+                    "sender": _sender_email_from_graph(message),
+                    "subject": message.get("subject") or "",
+                    "current_folder": message.get("parentFolderId"),
+                    "recommendation": decision.to_dict(),
+                    "provider_consulted": bool(decision.provider_consulted),
+                    "status": "classified",
+                }
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("inbox.dryrun.classify_failed message_id=%s", message.get("id"))
+            results.append(
+                {
+                    "provider_message_id": message.get("id"),
+                    "received_at": message.get("receivedDateTime"),
+                    "sender": _sender_email_from_graph(message),
+                    "subject": message.get("subject") or "",
+                    "current_folder": message.get("parentFolderId"),
+                    "recommendation": None,
+                    "provider_consulted": False,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "dry_run": True,
+        "destructive": False,
+        "generated_at": _utcnow().isoformat(),
+        "account": {
+            "email": account_record["email"],
+            "display_name": account_record["display_name"],
+        },
+        "limit": limit,
+        "fetched": len(messages),
+        "classified": sum(1 for r in results if r["status"] == "classified"),
+        "errors": sum(1 for r in results if r["status"] == "error"),
+        "provider": {
+            "selected": provider_cfg.provider,
+            "configured": provider_cfg.is_configured(),
+            "consulted": False,
+        },
+        "review_folder": classifier_module.REVIEW_FOLDER,
+        "results": results,
+    }
+
+
+@app.get("/mail/inbox/classify-dryrun/log")
+def classify_inbox_dryrun_log(
+    account: str = Query(..., description="Connected account email."),
+    limit: int = Query(
+        default=INBOX_DRY_RUN_DEFAULT_LIMIT,
+        ge=1,
+        le=INBOX_DRY_RUN_MAX_LIMIT,
+    ),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Read-only view of persisted dry-run classifications for an account."""
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    target = _scope_account_to_session(rows, account)
+
+    entries = _load_dry_run_log(target["account_id"], limit=limit)
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "account": {
+            "email": target["email"],
+            "display_name": target["display_name"],
+        },
+        "limit": limit,
+        "count": len(entries),
+        "entries": entries,
+        "review_folder": classifier_module.REVIEW_FOLDER,
     }
 
 

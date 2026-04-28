@@ -9,6 +9,7 @@ Related planning docs:
 * [docs/working-sop.md](docs/working-sop.md) - verification-first workflow to reduce avoidable errors and unverified assumptions
 * [docs/github-cicd.md](docs/github-cicd.md) - GitHub Actions, Azure OIDC, and deployment workflow setup
 * [docs/ai-classifier-policy.md](docs/ai-classifier-policy.md) - dry-run AI classifier contract, Azure OpenAI/Azure AI provider choice, data minimization, BIOTRONIK posture, human-in-the-loop controls
+* [docs/inbox-dryrun.md](docs/inbox-dryrun.md) - operator-triggered, non-destructive inbox dry-run classification (endpoints, CLI, manual validation steps)
 
 ---
 
