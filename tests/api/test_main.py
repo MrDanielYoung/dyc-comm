@@ -1305,7 +1305,7 @@ def test_messages_sync_persists_and_records_sync_event(monkeypatch):
     def fake_persist(account_id, messages):
         assert account_id == "account-123"
         captured_messages.append(messages)
-        return (len(messages), len(messages))
+        return len(messages), len(messages)
 
     def fake_record(account_id, operation, **kwargs):
         sync_events.append({"account_id": account_id, "operation": operation, **kwargs})

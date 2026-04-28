@@ -1109,9 +1109,9 @@ def _persist_message_sightings(
 ) -> tuple[int, int]:
     """Persist message metadata. Returns (seen, persisted)."""
     if not messages:
-        return (0, 0)
+        return 0, 0
     if not _database_url():
-        return (len(messages), 0)
+        return len(messages), 0
 
     _ensure_account_tables()
     psycopg = _psycopg()
@@ -1169,7 +1169,7 @@ def _persist_message_sightings(
             detail="Unable to persist message sightings to PostgreSQL.",
         ) from exc
 
-    return (len(messages), persisted)
+    return len(messages), persisted
 
 
 async def _list_recent_messages(
