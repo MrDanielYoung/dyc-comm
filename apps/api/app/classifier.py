@@ -218,7 +218,7 @@ class AzureAIProviderConfig:
     has_api_key: bool
 
     @classmethod
-    def from_env(cls) -> "AzureAIProviderConfig":
+    def from_env(cls) -> AzureAIProviderConfig:
         endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("AZURE_AI_ENDPOINT")
         deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT") or os.getenv(
             "AZURE_AI_DEPLOYMENT"
