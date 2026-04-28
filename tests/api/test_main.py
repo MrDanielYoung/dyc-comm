@@ -388,17 +388,13 @@ def test_callback_allows_home_tenant_when_only_home_configured(monkeypatch):
 def test_callback_allows_dhw_tenant_when_allow_listed(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
-    monkeypatch.setenv(
-        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
-    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
     monkeypatch.setenv(
         "ALLOWED_ACCOUNT_EMAILS",
         "daniel@danielyoung.io,daniel.young@digitalhealthworks.com",
     )
     persisted = _wire_callback(
-        monkeypatch,
-        tid=DHW_TENANT,
-        email="daniel.young@digitalhealthworks.com",
+        monkeypatch, tid=DHW_TENANT, email="daniel.young@digitalhealthworks.com"
     )
 
     test_client = TestClient(main.app)
@@ -416,12 +412,8 @@ def test_callback_allows_dhw_tenant_when_allow_listed(monkeypatch):
 def test_callback_rejects_unknown_tenant_and_does_not_persist(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
-    monkeypatch.setenv(
-        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
-    )
-    persisted = _wire_callback(
-        monkeypatch, tid=UNKNOWN_TENANT, email="stranger@otherco.com"
-    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
+    persisted = _wire_callback(monkeypatch, tid=UNKNOWN_TENANT, email="stranger@otherco.com")
 
     test_client = TestClient(main.app)
     response = test_client.get(
@@ -459,12 +451,8 @@ def test_callback_rejects_external_tenant_when_only_home_configured(monkeypatch)
 def test_callback_rejects_email_not_in_allow_list(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
-    monkeypatch.setenv(
-        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
-    )
-    monkeypatch.setenv(
-        "ALLOWED_ACCOUNT_EMAILS", "daniel@danielyoung.io"
-    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
+    monkeypatch.setenv("ALLOWED_ACCOUNT_EMAILS", "daniel@danielyoung.io")
     persisted = _wire_callback(
         monkeypatch, tid=DHW_TENANT, email="someone-else@digitalhealthworks.com"
     )
@@ -545,9 +533,7 @@ def test_authorize_url_uses_organizations_when_multi_tenant(monkeypatch):
         "MICROSOFT_ENTRA_REDIRECT_URI",
         "http://localhost:8000/auth/microsoft/callback",
     )
-    monkeypatch.setenv(
-        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
-    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
     test_client = TestClient(main.app)
 
     response = test_client.get("/auth/microsoft/start", follow_redirects=False)
@@ -578,9 +564,7 @@ def test_authorize_url_pins_home_tenant_when_only_home_allowed(monkeypatch):
 def test_config_check_reports_allow_list_presence_without_values(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
-    monkeypatch.setenv(
-        "ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}"
-    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
     monkeypatch.setenv(
         "ALLOWED_ACCOUNT_EMAILS",
         "daniel@danielyoung.io,daniel.young@digitalhealthworks.com",

@@ -500,10 +500,7 @@ def _authorize_callback_identity(
     normalized_email = _normalize_id(email)
 
     if not tenant_id:
-        logger.warning(
-            "auth.callback.denied reason=missing_tid email=%s",
-            normalized_email,
-        )
+        logger.warning("auth.callback.denied reason=missing_tid email=%s", normalized_email)
         raise HTTPException(
             status_code=403,
             detail="Sign-in denied: tenant id (tid) could not be established from the token.",
@@ -547,11 +544,7 @@ def _authorize_callback_identity(
             detail=f"Sign-in denied: account {email} is not allow-listed.",
         )
 
-    logger.info(
-        "auth.callback.allowed email=%s tid=%s",
-        normalized_email,
-        tenant_id,
-    )
+    logger.info("auth.callback.allowed email=%s tid=%s", normalized_email, tenant_id)
     upn = claims.get("upn") or claims.get("preferred_username") or profile.get("userPrincipalName")
     return AuthorizedIdentity(email=email, tenant_id=tenant_id, upn=upn)
 
