@@ -31,20 +31,6 @@ from typing import Any, Literal
 REVIEW_FOLDER = "10 - Review"
 
 # Allowed primary categories. Mirrors architecture.md §8 taxonomy.
-PrimaryCategory = Literal[
-    "human_direct",
-    "health_family",
-    "finance_money",
-    "meetings_scheduling",
-    "access_auth",
-    "service_updates",
-    "newsletters_news",
-    "marketing_promotions",
-    "notifications_system",
-    "legal_contracts",
-    "unknown_ambiguous",
-]
-
 ALLOWED_CATEGORIES: tuple[str, ...] = (
     "human_direct",
     "health_family",
@@ -63,7 +49,6 @@ ALLOWED_CATEGORIES: tuple[str, ...] = (
 # Review. The numbers mirror architecture.md §10.
 HIGH_THRESHOLD = 0.90
 MEDIUM_THRESHOLD = 0.70
-LOW_THRESHOLD = 0.50
 
 # Heuristic keyword sets used by the deterministic safety pass. These are
 # intentionally conservative — false positives just route to 10 - Review,
@@ -220,21 +205,10 @@ class AzureAIProviderConfig:
     @classmethod
     def from_env(cls) -> AzureAIProviderConfig:
         endpoint = os.getenv("AZURE_OPENAI_ENDPOINT") or os.getenv("AZURE_AI_ENDPOINT")
-        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT") or os.getenv(
-            "AZURE_AI_DEPLOYMENT"
-        )
+        deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT") or os.getenv("AZURE_AI_DEPLOYMENT")
         api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-        has_api_key = bool(
-            os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_AI_API_KEY")
-        )
-        if os.getenv("AZURE_OPENAI_ENDPOINT") and (
-            os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_USE_AAD")
-        ):
-            provider: Literal["azure_openai", "azure_ai", "none"] = "azure_openai"
-        elif os.getenv("AZURE_AI_ENDPOINT"):
-            provider = "azure_ai"
-        else:
-            provider = "none"
+        has_api_key = bool(os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_AI_API_KEY"))
+        provider = _select_provider()
         return cls(
             provider=provider,
             endpoint=endpoint,
@@ -245,6 +219,16 @@ class AzureAIProviderConfig:
 
     def is_configured(self) -> bool:
         return self.provider != "none" and bool(self.endpoint) and bool(self.deployment)
+
+
+def _select_provider() -> Literal["azure_openai", "azure_ai", "none"]:
+    if os.getenv("AZURE_OPENAI_ENDPOINT") and (
+        os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_USE_AAD")
+    ):
+        return "azure_openai"
+    if os.getenv("AZURE_AI_ENDPOINT"):
+        return "azure_ai"
+    return "none"
 
 
 def _band(confidence: float) -> Literal["high", "medium", "low"]:
@@ -399,18 +383,12 @@ def classify(
     # the deterministic signal is high-confidence AND the legal-keyword
     # safety flag was NOT triggered (e.g. clear DocuSign envelope). If the
     # legal flag fired, we never auto-route legal mail.
-    if (
-        category == "legal_contracts"
-        and "legal_or_contractual" in safety.flags
-    ):
+    if category == "legal_contracts" and "legal_or_contractual" in safety.flags:
         forced_review = True
 
-    if forced_review:
-        recommended_folder = REVIEW_FOLDER
-    else:
-        recommended_folder = _category_to_folder(category)
+    recommended_folder = REVIEW_FOLDER if forced_review else _category_to_folder(category)
 
-    decision = ClassificationDecision(
+    return ClassificationDecision(
         category=category,
         recommended_folder=recommended_folder,
         confidence=confidence,
@@ -421,7 +399,6 @@ def classify(
         provider_consulted=False,
         provider=(provider_config.provider if provider_config else None),
     )
-    return decision
 
 
 # Mapping from category to the DYC-managed folder name. Categories not
