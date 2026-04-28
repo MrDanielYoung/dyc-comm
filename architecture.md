@@ -211,14 +211,32 @@ User Browser
 - auto-archiving low-confidence human mail
 - suppressing health, finance, meeting, or access mail without review
 
+### Conservative / Fallback Folder
+
+`10 - Review` is the canonical fallback folder for AI routing. Whenever the
+classifier is uncertain, or the message falls into a category that requires
+human judgment, the message is routed to `10 - Review` (or left in `Inbox`)
+rather than guessed into a more specific folder. Categories that always
+route to `10 - Review` regardless of confidence:
+
+- ambiguous business emails
+- legal or contractual emails not unambiguously matched to `70 - Contracts`
+- sensitive customer-adjacent or patient-adjacent content
+- short emails without enough context to classify confidently
+- threads where the newest message changes the meaning of earlier messages
+- messages requiring judgment about tone, politics, or obligations
+
+See docs/mvp-account-strategy.md → "AI Routing And Safety Policy" for the
+full rule set and rationale.
+
 ## 10. Confidence Thresholds
 
 - >= 0.90: safe for non-destructive auto-labeling later
 - 0.70–0.89: route to queue and include in digest
-- 0.50–0.69: Needs Triage unless clearly low-risk
-- < 0.50: Needs Triage
+- 0.50–0.69: route to `10 - Review` or Needs Triage; never guess a specific numbered folder
+- < 0.50: route to `10 - Review` (or Needs Triage)
 
-In v1, all mailbox-changing actions require approval regardless of confidence.
+In v1, all mailbox-changing actions require approval regardless of confidence. Low-confidence classifications never auto-route to a specific numbered folder — they go to `10 - Review`, and the AI never auto-deletes or auto-sends.
 
 ## 11. Provider Abstraction
 
