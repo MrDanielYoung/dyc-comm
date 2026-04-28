@@ -995,9 +995,7 @@ def test_activity_returns_empty_when_no_accounts(monkeypatch):
     assert payload["folder_activity"]["events"] == []
     assert payload["message_movement"]["available"] is False
     assert payload["message_movement"]["events"] == []
-    assert any(
-        item["metric"] == "message_movement" for item in payload["pending_instrumentation"]
-    )
+    assert any(item["metric"] == "message_movement" for item in payload["pending_instrumentation"])
 
 
 def test_activity_includes_folder_events(monkeypatch):

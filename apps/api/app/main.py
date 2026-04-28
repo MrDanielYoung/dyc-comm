@@ -1554,8 +1554,7 @@ def _compute_alerts(
                         "access is not ready (no refresh token or session-only)."
                     ),
                     "next_action": (
-                        "Re-run Microsoft sign-in for this account so a refresh "
-                        "token is stored."
+                        "Re-run Microsoft sign-in for this account so a refresh token is stored."
                     ),
                     "context": {"email": account.get("email")},
                 }
