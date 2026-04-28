@@ -1426,19 +1426,25 @@ def _load_folder_activity(account_id: str, limit: int = 25) -> list[dict[str, An
 
     events: list[dict[str, Any]] = []
     for row in rows:
-        provider_folder_id, display_name, canonical_name, ownership, is_dyc_target, \
-            created_at, updated_at = row
+        (
+            provider_folder_id,
+            display_name,
+            canonical_name,
+            ownership,
+            is_dyc_target,
+            created_at,
+            updated_at,
+        ) = row
         is_initial = (
             updated_at is None
             or created_at is None
             or abs((updated_at - created_at).total_seconds()) < 1.0
         )
+        timestamp = updated_at or created_at
         events.append(
             {
                 "event_type": "folder.bootstrap" if is_initial else "folder.sync",
-                "occurred_at": (updated_at or created_at).isoformat()
-                if (updated_at or created_at)
-                else None,
+                "occurred_at": timestamp.isoformat() if timestamp else None,
                 "folder": {
                     "provider_folder_id": provider_folder_id,
                     "display_name": display_name,
@@ -1477,18 +1483,20 @@ def activity_log(
     )
     folder_events = folder_events[:limit]
 
+    folder_reason: str | None = None
+    if not folder_available:
+        folder_reason = (
+            "No connected_account rows for this session; folder activity "
+            "becomes available once accounts are persisted via the OAuth "
+            "callback with DATABASE_URL configured."
+        )
+
     return {
         "generated_at": _utcnow().isoformat(),
         "user": {"email": user_email},
         "folder_activity": {
             "available": folder_available,
-            "reason": None
-            if folder_available
-            else (
-                "No connected_account rows for this session; folder activity "
-                "becomes available once accounts are persisted via the OAuth "
-                "callback with DATABASE_URL configured."
-            ),
+            "reason": folder_reason,
             "events": folder_events,
         },
         "message_movement": {
@@ -1503,7 +1511,6 @@ def activity_log(
 
 
 def _compute_alerts(
-    user_email: str,
     accounts: list[dict[str, Any]],
     runtime_present: bool,
 ) -> list[dict[str, Any]]:
@@ -1584,7 +1591,7 @@ def _compute_alerts(
                         "code": "folder_inventory_missing",
                         "severity": "info",
                         "message": (
-                            f"No folder inventory has been synced for "
+                            "No folder inventory has been synced for "
                             f"{account.get('email')} yet."
                         ),
                         "next_action": (
@@ -1632,7 +1639,6 @@ def _compute_alerts(
 @app.get("/alerts")
 def alerts(
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
-    linked_name: str | None = Cookie(default=None, alias=NAME_COOKIE),
 ) -> dict[str, Any]:
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
@@ -1658,7 +1664,7 @@ def alerts(
         bool(os.getenv(name)) for name, _ in _RUNTIME_VARIABLES if name != "KEY_VAULT_REFS_ENABLED"
     )
 
-    items = _compute_alerts(user_email, accounts, runtime_present)
+    items = _compute_alerts(accounts, runtime_present)
     counts = {"error": 0, "warning": 0, "info": 0}
     for item in items:
         severity = item.get("severity", "info")
