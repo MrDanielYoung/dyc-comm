@@ -19,9 +19,21 @@ RUNTIME_VARIABLES = (
     "KEY_VAULT_REFS_ENABLED",
     "ALLOWED_MICROSOFT_TENANT_IDS",
     "ALLOWED_ACCOUNT_EMAILS",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_DEPLOYMENT",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_AI_ENDPOINT",
+    "AZURE_AI_DEPLOYMENT",
+    "AZURE_AI_API_KEY",
 )
 
-SECRET_VARIABLES = {"DATABASE_URL", "MICROSOFT_ENTRA_CLIENT_SECRET"}
+SECRET_VARIABLES = {
+    "DATABASE_URL",
+    "MICROSOFT_ENTRA_CLIENT_SECRET",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_AI_API_KEY",
+}
 
 DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
 DHW_TENANT = "3dd54b52-c31e-442e-8705-a56b839e59a7"
@@ -97,6 +109,18 @@ def test_config_check_reflects_set_env(monkeypatch):
     monkeypatch.setenv("KEY_VAULT_REFS_ENABLED", "true")
     monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", "tenant-a,tenant-b")
     monkeypatch.setenv("ALLOWED_ACCOUNT_EMAILS", "a@example.com")
+    # Azure AI provider scaffolding (optional; set so the all-present
+    # assertion below applies to the full RUNTIME_VARIABLES tuple).
+    azure_openai_key = "azure-openai-secret-do-not-leak"
+    azure_ai_key = "azure-ai-secret-do-not-leak"
+    azure_endpoint = "https://example.openai.azure.com"
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", azure_endpoint)
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", azure_openai_key)
+    monkeypatch.setenv("AZURE_AI_ENDPOINT", "https://example.ai.azure.com")
+    monkeypatch.setenv("AZURE_AI_DEPLOYMENT", "phi-4")
+    monkeypatch.setenv("AZURE_AI_API_KEY", azure_ai_key)
 
     response = client.get("/config-check")
     assert response.status_code == 200
@@ -117,7 +141,16 @@ def test_config_check_reflects_set_env(monkeypatch):
         assert variables[name]["is_secret"] is (name in SECRET_VARIABLES)
 
     body = response.text
-    for sensitive in (secret_value, db_value, redirect_value, "client-id", "tenant-id"):
+    for sensitive in (
+        secret_value,
+        db_value,
+        redirect_value,
+        "client-id",
+        "tenant-id",
+        azure_openai_key,
+        azure_ai_key,
+        azure_endpoint,
+    ):
         assert sensitive not in body, f"value leaked into /config-check response: {sensitive!r}"
 
 
