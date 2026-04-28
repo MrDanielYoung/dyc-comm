@@ -6,10 +6,6 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
   api-checks:
     runs-on: ubuntu-latest
@@ -67,32 +63,6 @@ jobs:
           echo "------ DIFF ------"
           cat /tmp/ruff-format-diff.txt
           exit $rc
-
-      - name: Upload ruff format diff
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ruff-format-diff
-          path: |
-            /tmp/ruff-format-check.txt
-            /tmp/ruff-format-diff.txt
-          if-no-files-found: ignore
-
-      - name: Apply ruff format and push diff to debug branch
-        if: failure()
-        run: |
-          set -e
-          ruff format apps tests || true
-          git config user.email "ci@dyc-comm.local"
-          git config user.name "CI Debug"
-          git checkout -B ci-debug-format
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No changes after ruff format"
-            exit 0
-          fi
-          git commit -m "ci(debug): ruff format applied"
-          git push -f origin ci-debug-format
 
       - name: Comment ruff diff on PR
         if: failure() && github.event_name == 'pull_request'

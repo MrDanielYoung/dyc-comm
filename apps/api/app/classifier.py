@@ -375,9 +375,7 @@ def classify(
     if confidence < MEDIUM_THRESHOLD:
         forced_review = True
         if not safety.flags:
-            reasons.append(
-                "confidence below medium threshold — defaulting to 10 - Review"
-            )
+            reasons.append("confidence below medium threshold — defaulting to 10 - Review")
 
     # legal_contracts is allowed to route to 70 - Contracts only when both
     # the deterministic signal is high-confidence AND the legal-keyword

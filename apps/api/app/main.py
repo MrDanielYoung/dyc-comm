@@ -1200,9 +1200,7 @@ async def classify_recommend(request: Request) -> dict[str, Any]:
     try:
         rule_confidence = float(body.get("rule_confidence", 0.0) or 0.0)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400, detail="rule_confidence must be a number."
-        ) from exc
+        raise HTTPException(status_code=400, detail="rule_confidence must be a number.") from exc
 
     ci = classifier_module.ClassificationInput(
         subject=str(body.get("subject") or ""),
