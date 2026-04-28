@@ -943,17 +943,23 @@
 
       .app-shell {
         display: grid;
-        grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
-        gap: 18px;
+        grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+        gap: 22px;
         align-items: start;
+      }
+
+      .app-main {
+        min-width: 0;
       }
 
       .account-nav {
         position: sticky;
         top: 18px;
-        display: grid;
-        gap: 10px;
-        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 16px;
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: var(--radius-xl);
         background: var(--panel);
@@ -970,22 +976,41 @@
       }
 
       .account-nav-list {
-        display: grid;
-        gap: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
       }
 
       .account-nav-button {
-        display: grid;
-        gap: 2px;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
         text-align: left;
-        min-height: 56px;
-        padding: 10px 12px;
+        width: 100%;
+        min-width: 0;
+        padding: 12px 14px;
         border-radius: 10px;
         border: 1px solid var(--line);
         background: rgba(255, 255, 255, 0.82);
         color: var(--text);
         font: inherit;
         cursor: pointer;
+        transition:
+          background-color 140ms ease,
+          border-color 140ms ease,
+          box-shadow 140ms ease;
+      }
+
+      .account-nav-button:hover {
+        background: rgba(255, 255, 255, 1);
+        border-color: rgba(74, 131, 197, 0.32);
+      }
+
+      .account-nav-button:focus-visible {
+        outline: 2px solid var(--accent-deep);
+        outline-offset: 2px;
       }
 
       .account-nav-button[aria-current="true"] {
@@ -995,47 +1020,92 @@
       }
 
       .account-nav-button .account-nav-email {
-        font-size: 0.86rem;
+        display: block;
+        min-width: 0;
+        max-width: 100%;
+        font-size: 0.88rem;
         font-weight: 600;
         line-height: 1.2;
-        word-break: break-word;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .account-nav-button .account-nav-meta {
-        font-size: 0.7rem;
+        display: block;
+        min-width: 0;
+        max-width: 100%;
+        font-size: 0.68rem;
         color: var(--muted);
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .account-nav-connect {
-        display: grid;
-        gap: 6px;
-        padding: 12px;
-        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 14px;
+        border-radius: 12px;
         border: 1px dashed rgba(74, 131, 197, 0.42);
         background: rgba(74, 131, 197, 0.04);
       }
 
       .account-nav-connect h3 {
         margin: 0;
-        font-size: 0.82rem;
+        font-size: 0.86rem;
         font-weight: 700;
       }
 
       .account-nav-connect p {
         margin: 0;
-        font-size: 0.74rem;
+        font-size: 0.76rem;
         color: var(--muted);
-        line-height: 1.4;
+        line-height: 1.45;
+      }
+
+      .account-nav-connect p code {
+        word-break: break-all;
       }
 
       .account-nav-connect .button-link {
-        min-height: 38px;
-        padding: 8px 10px;
-        font-size: 0.78rem;
+        display: block;
+        width: 100%;
+        min-height: 40px;
+        padding: 10px 12px;
+        font-size: 0.82rem;
         text-align: center;
+        overflow-wrap: anywhere;
         word-break: break-word;
+      }
+
+      .tenant-warning {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(143, 90, 18, 0.32);
+        background: rgba(143, 90, 18, 0.06);
+        color: #5b3a09;
+        font-size: 0.74rem;
+        line-height: 1.45;
+      }
+
+      .tenant-warning strong {
+        display: block;
+        margin-bottom: 2px;
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--warning);
+      }
+
+      .tenant-warning a {
+        color: var(--accent-deep);
+        text-decoration: underline;
+        text-underline-offset: 2px;
       }
 
       .selected-account-label {
@@ -1065,17 +1135,31 @@
 
         .account-nav {
           position: static;
+          gap: 12px;
         }
 
         .account-nav-list {
-          grid-auto-flow: column;
-          grid-auto-columns: minmax(180px, max-content);
+          flex-direction: row;
+          flex-wrap: nowrap;
+          gap: 8px;
           overflow-x: auto;
-          padding-bottom: 4px;
+          overflow-y: hidden;
+          padding: 2px 2px 8px;
+          margin: 0 -2px;
+          scroll-snap-type: x proximity;
+          -webkit-overflow-scrolling: touch;
         }
 
         .account-nav-button {
-          min-height: 48px;
+          flex: 0 0 auto;
+          width: auto;
+          min-width: 200px;
+          max-width: 280px;
+          scroll-snap-align: start;
+        }
+
+        .account-nav-connect {
+          padding: 12px;
         }
       }
 
@@ -1236,6 +1320,19 @@
                   data-testid="account-nav-connect-dhw"
                   href="#"
                 >Connect DHW</a>
+                <p
+                  class="tenant-warning"
+                  data-testid="account-nav-tenant-warning"
+                >
+                  <strong>Heads up — tenant access</strong>
+                  If sign-in fails with <code>AADSTS50020</code>, the DHW
+                  account is in a different Microsoft tenant than this app.
+                  See <a
+                    href="https://github.com/MrDanielYoung/dyc-comm/blob/main/docs/auth-troubleshooting.md"
+                    target="_blank"
+                    rel="noopener"
+                  >auth troubleshooting</a>.
+                </p>
               </div>
             </aside>
             <div class="app-main">
@@ -1354,6 +1451,23 @@
                           href="#"
                         >Connect a different account</a>
                       </div>
+                      <p
+                        class="tenant-warning"
+                        data-testid="connect-dhw-tenant-warning"
+                      >
+                        <strong>If DHW sign-in fails (AADSTS50020)</strong>
+                        The Entra app is currently single-tenant in
+                        <em>Decoding Options Inc.</em>, so accounts from the
+                        DHW tenant cannot sign in directly. Either invite the
+                        DHW user as an external (guest) user into the Decoding
+                        Options tenant, or switch the Entra app to multi-tenant
+                        and have a DHW admin grant consent. See
+                        <a
+                          href="https://github.com/MrDanielYoung/dyc-comm/blob/main/docs/auth-troubleshooting.md"
+                          target="_blank"
+                          rel="noopener"
+                        >docs/auth-troubleshooting.md</a>.
+                      </p>
                     </div>
                   </section>
 

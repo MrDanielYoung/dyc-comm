@@ -4,6 +4,10 @@ The `dyc-comm-prod-web` static shell is intended for a single authorized
 operator. This document describes the in-app gating that ships with the
 console and the stronger platform-level controls recommended on top of it.
 
+For sign-in errors (in particular `AADSTS50020` when a Digital Health
+Works account is denied because the Entra app is single-tenant), see
+[`auth-troubleshooting.md`](auth-troubleshooting.md).
+
 ## App-level SSO gating
 
 The single-page UI in `apps/web/index.html` boots into a locked "Sign in
