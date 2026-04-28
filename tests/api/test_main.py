@@ -662,11 +662,252 @@ def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
         ("GET", "/mail/folders/inventory"),
         ("POST", "/mail/folders/bootstrap"),
         ("POST", "/mail/folders/inventory/sync"),
+        ("GET", "/accounts"),
+        ("GET", "/dashboard/summary"),
+        ("GET", "/accounts/daniel@danielyoung.io/dashboard"),
     )
     for method, path in protected:
         response = test_client.request(method, path)
         assert response.status_code == 401, f"{method} {path} should require a session"
         assert response.json()["detail"] == "No linked account session found."
+
+
+def test_accounts_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.get("/accounts")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_accounts_returns_session_only_when_no_db(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts",
+        cookies={
+            main.EMAIL_COOKIE: "daniel@danielyoung.io",
+            main.NAME_COOKIE: "Daniel Young",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user"] == {"email": "daniel@danielyoung.io"}
+    assert payload["accounts"] == [
+        {
+            "account_id": None,
+            "provider": main.MICROSOFT_PROVIDER,
+            "email": "daniel@danielyoung.io",
+            "display_name": "Daniel Young",
+            "status": "session_only",
+            "mailbox_access_ready": False,
+            "token_updated_at": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+
+
+def test_accounts_returns_persisted_rows(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": "2026-04-27T12:00:00+00:00",
+                "updated_at": "2026-04-28T01:00:00+00:00",
+                "created_at": "2026-04-01T00:00:00+00:00",
+            }
+        ],
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accounts"][0]["account_id"] == "account-123"
+    assert payload["accounts"][0]["status"] == "active"
+    assert payload["accounts"][0]["mailbox_access_ready"] is True
+
+
+def test_dashboard_summary_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.get("/dashboard/summary")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_dashboard_summary_session_only_view(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/summary",
+        cookies={
+            main.EMAIL_COOKIE: "daniel@danielyoung.io",
+            main.NAME_COOKIE: "Daniel Young",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user"] == {"email": "daniel@danielyoung.io"}
+    assert payload["totals"] == {
+        "connected_accounts": 1,
+        "mailbox_ready_accounts": 0,
+        "total_folders": 0,
+        "dyc_target_folders": 0,
+    }
+    assert payload["accounts"][0]["account"]["status"] == "session_only"
+    assert payload["accounts"][0]["folder_inventory"]["available"] is False
+    assert payload["accounts"][0]["email_volume"]["available"] is False
+    assert payload["accounts"][0]["action_activity"]["available"] is False
+    pending = {entry["metric"] for entry in payload["pending_instrumentation"]}
+    assert pending == {"email_volume", "action_activity"}
+
+
+def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": "2026-04-27T12:00:00+00:00",
+                "updated_at": "2026-04-28T01:00:00+00:00",
+                "created_at": "2026-04-01T00:00:00+00:00",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_load_folder_inventory",
+        lambda account_id: [
+            {
+                "id": "review-id",
+                "displayName": "10 - Review",
+                "ownership": "dyc_managed",
+                "is_dyc_target": True,
+            },
+            {
+                "id": "wolt-id",
+                "displayName": "Wolt",
+                "ownership": "legacy_rule",
+                "is_dyc_target": False,
+            },
+            {
+                "id": "inbox-id",
+                "displayName": "Inbox",
+                "ownership": "system",
+                "is_dyc_target": False,
+            },
+        ],
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/summary",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["totals"]["connected_accounts"] == 1
+    assert payload["totals"]["mailbox_ready_accounts"] == 1
+    assert payload["totals"]["total_folders"] == 3
+    assert payload["totals"]["dyc_target_folders"] == 1
+
+    account_entry = payload["accounts"][0]
+    assert account_entry["account"]["mailbox_access_ready"] is True
+    assert account_entry["folder_inventory"] == {
+        "available": True,
+        "total_folders": 3,
+        "dyc_target_folders": 1,
+        "by_ownership": {"dyc_managed": 1, "legacy_rule": 1, "system": 1},
+        "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+        "is_bootstrapped": False,
+    }
+    assert account_entry["email_volume"]["available"] is False
+    assert account_entry["email_volume"]["messages_in"] is None
+    assert account_entry["action_activity"]["available"] is False
+
+
+def test_account_dashboard_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.get("/accounts/daniel@danielyoung.io/dashboard")
+    assert response.status_code == 401
+
+
+def test_account_dashboard_returns_404_for_unknown_email(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts/missing@example.com/dashboard",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_account_dashboard_returns_payload_for_match(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(main, "_load_folder_inventory", lambda account_id: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts/daniel@danielyoung.io/dashboard",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["account"]["account_id"] == "account-123"
+    assert payload["folder_inventory"]["available"] is True
+    assert payload["folder_inventory"]["total_folders"] == 0
+    assert payload["email_volume"]["available"] is False
+    assert payload["action_activity"]["available"] is False
 
 
 def test_cli_build_parser_dispatches_subcommands():

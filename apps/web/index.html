@@ -586,6 +586,118 @@
         justify-content: center;
       }
 
+      .dashboard-panel {
+        display: grid;
+        gap: 16px;
+      }
+
+      .dashboard-totals {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .dashboard-tile {
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+      }
+
+      .dashboard-tile .label {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 0 0 6px;
+      }
+
+      .dashboard-tile .value {
+        font-size: 1.4rem;
+        font-weight: 600;
+        margin: 0;
+        color: var(--text);
+      }
+
+      .dashboard-account {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .dashboard-account-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .dashboard-account-header h3 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .metric-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid var(--line);
+      }
+
+      .metric-row .metric-label {
+        font-size: 0.84rem;
+        font-weight: 500;
+      }
+
+      .metric-row .metric-value {
+        font-size: 0.84rem;
+        color: var(--muted);
+      }
+
+      .metric-row .metric-value strong {
+        color: var(--text);
+      }
+
+      .metric-tag {
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 3px 8px;
+        border-radius: 999px;
+      }
+
+      .metric-tag.live {
+        background: rgba(29, 127, 70, 0.12);
+        color: var(--success);
+      }
+
+      .metric-tag.pending {
+        background: rgba(143, 90, 18, 0.12);
+        color: var(--warning);
+      }
+
+      .metric-reason {
+        margin: 0;
+        font-size: 0.78rem;
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      @media (max-width: 720px) {
+        .dashboard-totals {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
       [hidden] {
         display: none !important;
       }
@@ -716,6 +828,37 @@
               </aside>
             </section>
 
+            <section class="panel section-panel dashboard-panel" data-testid="dashboard-panel">
+              <h2 class="section-title">Operations dashboard</h2>
+              <p class="empty-state">
+                Live operational signals per connected account. Metrics tagged
+                <span class="metric-tag pending">pending</span>
+                require ingestion or audit instrumentation that is not yet wired up;
+                they will stay empty until the connector pipeline lands.
+              </p>
+              <div class="dashboard-totals" id="dashboardTotals">
+                <div class="dashboard-tile">
+                  <p class="label">Connected accounts</p>
+                  <p class="value" id="totalAccounts">—</p>
+                </div>
+                <div class="dashboard-tile">
+                  <p class="label">Mailbox-ready</p>
+                  <p class="value" id="totalReady">—</p>
+                </div>
+                <div class="dashboard-tile">
+                  <p class="label">Folders tracked</p>
+                  <p class="value" id="totalFolders">—</p>
+                </div>
+                <div class="dashboard-tile">
+                  <p class="label">DYC-target folders</p>
+                  <p class="value" id="totalDycTargets">—</p>
+                </div>
+              </div>
+              <div id="dashboardAccountList">
+                <p class="empty-state">Loading dashboard…</p>
+              </div>
+            </section>
+
             <section class="section-grid">
               <section class="panel section-panel">
                 <h2 class="section-title">Mailbox</h2>
@@ -839,6 +982,11 @@
       const bootstrapButton = document.getElementById("bootstrapButton");
       const dycFolderList = document.getElementById("dycFolderList");
       const otherFolderList = document.getElementById("otherFolderList");
+      const totalAccounts = document.getElementById("totalAccounts");
+      const totalReady = document.getElementById("totalReady");
+      const totalFolders = document.getElementById("totalFolders");
+      const totalDycTargets = document.getElementById("totalDycTargets");
+      const dashboardAccountList = document.getElementById("dashboardAccountList");
 
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
@@ -879,6 +1027,7 @@
         }
         disableMailboxActions();
         clearMailboxView();
+        clearDashboard();
       }
 
       function showApp(account) {
@@ -1021,6 +1170,114 @@
         return response.json();
       }
 
+      function escapeHtml(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (ch) => (
+          { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+        ));
+      }
+
+      function formatTimestamp(value) {
+        if (!value) return "—";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleString();
+      }
+
+      function clearDashboard() {
+        totalAccounts.textContent = "—";
+        totalReady.textContent = "—";
+        totalFolders.textContent = "—";
+        totalDycTargets.textContent = "—";
+        dashboardAccountList.innerHTML = `<p class="empty-state">Sign in to view the operations dashboard.</p>`;
+      }
+
+      function renderDashboardAccount(entry) {
+        const account = entry.account || {};
+        const folder = entry.folder_inventory || {};
+        const volume = entry.email_volume || {};
+        const action = entry.action_activity || {};
+
+        const folderLive = folder.available
+          ? `<span class="metric-tag live">live</span>`
+          : `<span class="metric-tag pending">pending</span>`;
+        const folderValue = folder.available
+          ? `<strong>${folder.total_folders ?? 0}</strong> folders · ${folder.dyc_target_folders ?? 0} DYC-target`
+          : "Awaiting folder inventory sync";
+        const folderReason = folder.available ? "" : (folder.reason || "");
+
+        const volumeReason = volume.reason || "Email ingestion not yet wired.";
+        const actionReason = action.reason || "Action logging not yet wired.";
+
+        return `
+          <div class="dashboard-account">
+            <div class="dashboard-account-header">
+              <h3>${escapeHtml(account.email || "Unknown account")}</h3>
+              <span class="status-chip ${account.mailbox_access_ready ? "connected" : "idle"}">
+                ${account.mailbox_access_ready ? "Mailbox ready" : (account.status || "session only")}
+              </span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Provider</span>
+              <span class="metric-value"><strong>${escapeHtml(account.provider || "—")}</strong></span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Token last refreshed</span>
+              <span class="metric-value">${escapeHtml(formatTimestamp(account.token_updated_at))}</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Account record updated</span>
+              <span class="metric-value">${escapeHtml(formatTimestamp(account.updated_at))}</span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Folder inventory ${folderLive}</span>
+              <span class="metric-value">${folderValue}</span>
+            </div>
+            ${folderReason ? `<p class="metric-reason">${escapeHtml(folderReason)}</p>` : ""}
+            <div class="metric-row">
+              <span class="metric-label">Email volume <span class="metric-tag pending">pending</span></span>
+              <span class="metric-value">—</span>
+            </div>
+            <p class="metric-reason">${escapeHtml(volumeReason)}</p>
+            <div class="metric-row">
+              <span class="metric-label">Processed / errors <span class="metric-tag pending">pending</span></span>
+              <span class="metric-value">—</span>
+            </div>
+            <p class="metric-reason">${escapeHtml(actionReason)}</p>
+          </div>
+        `;
+      }
+
+      function renderDashboard(payload) {
+        if (!payload || !payload.totals) {
+          clearDashboard();
+          return;
+        }
+        totalAccounts.textContent = payload.totals.connected_accounts ?? 0;
+        totalReady.textContent = payload.totals.mailbox_ready_accounts ?? 0;
+        totalFolders.textContent = payload.totals.total_folders ?? 0;
+        totalDycTargets.textContent = payload.totals.dyc_target_folders ?? 0;
+
+        const entries = payload.accounts || [];
+        if (!entries.length) {
+          dashboardAccountList.innerHTML = `<p class="empty-state">No connected accounts yet.</p>`;
+          return;
+        }
+        dashboardAccountList.innerHTML = entries.map(renderDashboardAccount).join("");
+      }
+
+      async function loadDashboard() {
+        const response = await fetch(`${API_BASE}/dashboard/summary`, {
+          credentials: "include"
+        });
+        if (!response.ok) {
+          dashboardAccountList.innerHTML = `<p class="empty-state">Dashboard unavailable (${response.status}).</p>`;
+          return null;
+        }
+        const payload = await response.json();
+        renderDashboard(payload);
+        return payload;
+      }
+
       async function loadMailboxView() {
         const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
           method: "POST"
@@ -1100,6 +1357,14 @@
             return;
           }
           authNotice.textContent = `Mailbox connected, but folder inventory could not be loaded: ${error.message}`;
+        }
+
+        try {
+          await loadDashboard();
+        } catch (error) {
+          // Dashboard is supplementary; failure should not gate the rest of the UI.
+          dashboardAccountList.innerHTML =
+            `<p class="empty-state">Dashboard request failed: ${escapeHtml(error.message)}.</p>`;
         }
       }
 
