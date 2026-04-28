@@ -143,9 +143,7 @@ def _code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
 
-def _authorize_url(
-    state: str, code_challenge: str, login_hint: str | None = None
-) -> str:
+def _authorize_url(state: str, code_challenge: str, login_hint: str | None = None) -> str:
     tenant_id = _require_env("MICROSOFT_ENTRA_TENANT_ID")
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
@@ -969,9 +967,7 @@ def _record_audit_event(
         return
 
 
-def _load_account_activity(
-    account_id: str, *, limit: int = 50
-) -> list[dict[str, Any]]:
+def _load_account_activity(account_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
     if not _database_url():
         return []
 
