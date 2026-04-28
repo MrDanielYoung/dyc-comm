@@ -11,9 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-INDEX_HTML = (
-    Path(__file__).resolve().parents[2] / "apps" / "web" / "index.html"
-)
+INDEX_HTML = Path(__file__).resolve().parents[2] / "apps" / "web" / "index.html"
 
 
 def _read_html() -> str:
