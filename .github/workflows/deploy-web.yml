@@ -1,5 +1,29 @@
 name: Deploy Web
 
+# Image-only deploy for the production web Container App.
+#
+# Why image-only (mirrors deploy-api.yml):
+#   The previous implementation used azure/container-apps-deploy-action@v1,
+#   which wraps `az containerapp up`. That command was observed to report
+#   success without the running revision actually picking up a freshly built
+#   image, so the live site at https://comm.danielyoung.io stayed pinned to
+#   an older shell while subsequent main-branch commits (PRs #41, #43, #44)
+#   reported green deploys.
+#
+#   This workflow now does three narrow things:
+#     1. Build and push the web image to ACR via `docker login` + `docker
+#        build` + `docker push`. The registry username/password secrets
+#        already grant AcrPush, so no extra ACR Tasks RBAC is needed.
+#     2. Update ONLY the container image on the existing Container App via
+#        `az containerapp update --image`. Like the API, this creates a new
+#        revision while leaving any other Container App config alone.
+#     3. After the update, fetch the Container App FQDN and the public
+#        custom domain, then assert that the served HTML contains the
+#        current login copy and does NOT contain the removed
+#        "Private app — authorized account only." subtitle. If either
+#        check fails the deploy is marked failed so we don't keep shipping
+#        green-but-stale runs.
+
 on:
   workflow_dispatch:
   push:
@@ -21,7 +45,9 @@ env:
   RESOURCE_GROUP: dyc-comm-prod-rg
   CONTAINER_APP_NAME: dyc-comm-prod-web
   REGISTRY_URL: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io
-  IMAGE_NAME: dyccommprodacr-fmf6dchxeca3bsbf.azurecr.io/dyc-comm-web:${{ github.sha }}
+  IMAGE_REPOSITORY: dyc-comm-web
+  IMAGE_TAG: ${{ github.sha }}
+  PUBLIC_WEB_URL: https://comm.danielyoung.io
 
 jobs:
   deploy:
@@ -38,15 +64,138 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build and deploy web container app
-        uses: azure/container-apps-deploy-action@v1
+      - name: Log in to ACR with registry credentials
+        uses: docker/login-action@v3
         with:
-          appSourcePath: ${{ github.workspace }}/apps/web
-          dockerfilePath: Dockerfile
-          registryUrl: ${{ env.REGISTRY_URL }}
-          registryUsername: ${{ secrets.REGISTRY_USERNAME }}
-          registryPassword: ${{ secrets.REGISTRY_PASSWORD }}
-          imageToBuild: ${{ env.IMAGE_NAME }}
-          resourceGroup: ${{ env.RESOURCE_GROUP }}
-          containerAppName: ${{ env.CONTAINER_APP_NAME }}
-          disableTelemetry: true
+          registry: ${{ env.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push web image
+        run: |
+          set -euo pipefail
+          FULL_IMAGE="${REGISTRY_URL}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker build \
+            -f apps/web/Dockerfile \
+            -t "${FULL_IMAGE}" \
+            apps/web
+          docker push "${FULL_IMAGE}"
+
+      - name: Update Container App image only
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            FULL_IMAGE="${{ env.REGISTRY_URL }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+            echo "Deploying image: ${FULL_IMAGE}"
+            az containerapp update \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --image "${FULL_IMAGE}" \
+              --output none
+            echo "Container App image updated."
+
+      - name: Resolve Container App FQDN
+        id: fqdn
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            set -euo pipefail
+            FQDN=$(az containerapp show \
+              --name "${{ env.CONTAINER_APP_NAME }}" \
+              --resource-group "${{ env.RESOURCE_GROUP }}" \
+              --query "properties.configuration.ingress.fqdn" \
+              -o tsv)
+            if [ -z "${FQDN}" ]; then
+              echo "Could not resolve Container App FQDN" >&2
+              exit 1
+            fi
+            echo "Container App FQDN: ${FQDN}"
+            echo "fqdn=${FQDN}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed web content
+        # Fail the deploy if the served HTML still contains the removed
+        # "Private app" subtitle, or is missing strings we know are part
+        # of the current shell. Checks both the Container App FQDN
+        # (platform-level) and the public custom domain (end-user-level).
+        env:
+          FQDN: ${{ steps.fqdn.outputs.fqdn }}
+        run: |
+          set -euo pipefail
+
+          STALE_STRING='Private app'
+          # Substrings that must appear in the current apps/web/index.html.
+          # Picked because they straddle the recent UI changes (PRs #41,
+          # #43, #44) and would not all be present on the older shell.
+          REQUIRED_STRINGS=(
+            'Sign in with Microsoft'
+            'Inbox sorting (dry-run)'
+            'Mailbox access is not ready for this account'
+          )
+
+          check_url() {
+            local url="$1"
+            local label="$2"
+            echo "::group::Validating ${label} (${url})"
+            local body
+            # Retry briefly: the new revision may take a few seconds to
+            # become the active traffic target after `containerapp update`.
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if body=$(curl -fsSL --max-time 20 "${url}"); then
+                break
+              fi
+              echo "Fetch attempt ${attempt} failed; retrying..."
+              sleep 10
+              body=""
+            done
+            if [ -z "${body}" ]; then
+              echo "Failed to fetch ${url} after retries" >&2
+              echo "::endgroup::"
+              return 1
+            fi
+
+            local rc=0
+            if printf '%s' "${body}" | grep -qF "${STALE_STRING}"; then
+              echo "FAIL: ${label} still contains stale string '${STALE_STRING}'" >&2
+              rc=1
+            else
+              echo "OK: ${label} does not contain stale string."
+            fi
+            local needle
+            for needle in "${REQUIRED_STRINGS[@]}"; do
+              if ! printf '%s' "${body}" | grep -qF "${needle}"; then
+                echo "FAIL: ${label} missing required string: ${needle}" >&2
+                rc=1
+              else
+                echo "OK: ${label} contains: ${needle}"
+              fi
+            done
+            echo "::endgroup::"
+            return $rc
+          }
+
+          overall=0
+          # Allow up to ~3 minutes for the new revision to propagate before
+          # the strict checks below.
+          for attempt in 1 2 3 4 5 6; do
+            if check_url "https://${FQDN}" "Container App FQDN"; then
+              overall=0
+              break
+            fi
+            overall=1
+            echo "Container App FQDN check failed (attempt ${attempt}); waiting for new revision..."
+            sleep 20
+          done
+          if [ "${overall}" -ne 0 ]; then
+            exit 1
+          fi
+
+          # The custom domain may be fronted by a CDN/edge cache; treat its
+          # check as best-effort but still fail if it is clearly stale.
+          if ! check_url "${PUBLIC_WEB_URL}" "Public custom domain"; then
+            echo "Public domain ${PUBLIC_WEB_URL} is stale or unreachable." >&2
+            exit 1
+          fi
