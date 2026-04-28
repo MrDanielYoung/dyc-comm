@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import Body, Cookie, FastAPI, HTTPException, Query, Response
+from fastapi import Cookie, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -1166,7 +1166,7 @@ def config_check() -> dict[str, Any]:
 
 
 @app.post("/classify/recommend")
-def classify_recommend(payload: dict[str, Any] = Body(default=None)) -> dict[str, Any]:
+async def classify_recommend(request: Request) -> dict[str, Any]:
     """Dry-run AI classification recommendation.
 
     This endpoint is intentionally read-only and does not move, delete, or
@@ -1189,6 +1189,10 @@ def classify_recommend(payload: dict[str, Any] = Body(default=None)) -> dict[str
     thread-flip messages are forced to ``10 - Review`` regardless of
     other signals.
     """
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        payload = {}
     body = payload or {}
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Request body must be an object.")
