@@ -2071,9 +2071,7 @@ INBOX_DRY_RUN_MAX_LIMIT = 100
 INBOX_DRY_RUN_BODY_PREVIEW_CHARS = 4000
 
 
-def _scope_account_to_session(
-    rows: list[dict[str, Any]], requested_email: str
-) -> dict[str, Any]:
+def _scope_account_to_session(rows: list[dict[str, Any]], requested_email: str) -> dict[str, Any]:
     """Pick the connected_account row matching ``requested_email``.
 
     Raises 404 if the requested email is not linked to this session. This
@@ -2104,9 +2102,7 @@ async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, 
         params={
             "$top": str(limit),
             "$orderby": "receivedDateTime desc",
-            "$select": (
-                "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview"
-            ),
+            "$select": "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview",
         },
     )
     return payload.get("value", [])
@@ -2132,7 +2128,9 @@ def _sender_email_from_graph(message: dict[str, Any]) -> str:
     return ""
 
 
-def _classification_input_from_message(message: dict[str, Any]) -> Any:
+def _classification_input_from_message(
+    message: dict[str, Any],
+) -> classifier_module.ClassificationInput:
     return classifier_module.ClassificationInput(
         subject=str(message.get("subject") or ""),
         body=str(message.get("bodyPreview") or "")[:INBOX_DRY_RUN_BODY_PREVIEW_CHARS],
@@ -2147,8 +2145,8 @@ def _persist_dry_run_classification(
     account_id: str,
     account_email: str,
     message: dict[str, Any],
-    decision: Any,
-    provider_cfg: Any,
+    decision: classifier_module.ClassificationDecision,
+    provider_cfg: classifier_module.AzureAIProviderConfig | None,
     status: str,
     error: str | None = None,
 ) -> None:

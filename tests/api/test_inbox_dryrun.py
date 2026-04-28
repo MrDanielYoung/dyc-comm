@@ -277,9 +277,7 @@ def test_cli_inbox_dryrun_subcommands_dispatch():
     assert args.account == "daniel@danielyoung.io"
     assert args.limit == 25
 
-    args = parser.parse_args(
-        ["inbox-dryrun", "--account", "x@example.com", "--limit", "5"]
-    )
+    args = parser.parse_args(["inbox-dryrun", "--account", "x@example.com", "--limit", "5"])
     assert args.account == "x@example.com"
     assert args.limit == 5
 
