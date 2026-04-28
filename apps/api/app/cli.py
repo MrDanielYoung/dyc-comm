@@ -110,6 +110,32 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inbox_dryrun(args: argparse.Namespace) -> int:
+    with _client(args.api_base, args.cookie_file) as client:
+        payload = _request(
+            client,
+            "POST",
+            "/mail/inbox/classify-dryrun",
+            params={"account": args.account, "limit": args.limit},
+        )
+        _save_cookies(client, args.cookie_file)
+    _print(payload)
+    return 0
+
+
+def cmd_inbox_dryrun_log(args: argparse.Namespace) -> int:
+    with _client(args.api_base, args.cookie_file) as client:
+        payload = _request(
+            client,
+            "GET",
+            "/mail/inbox/classify-dryrun/log",
+            params={"account": args.account, "limit": args.limit},
+        )
+        _save_cookies(client, args.cookie_file)
+    _print(payload)
+    return 0
+
+
 def cmd_auth_url(args: argparse.Namespace) -> int:
     with _client(args.api_base, args.cookie_file) as client:
         response = client.get("/auth/microsoft/start")
@@ -171,6 +197,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     auth_url = subparsers.add_parser("auth-url", help="Print the Microsoft auth URL from the API")
     auth_url.set_defaults(func=cmd_auth_url)
+
+    inbox_dryrun = subparsers.add_parser(
+        "inbox-dryrun",
+        help="Fetch a recent inbox batch and run dry-run classification (non-destructive).",
+    )
+    inbox_dryrun.add_argument(
+        "--account",
+        default="daniel@danielyoung.io",
+        help="Connected account email to scan (default: daniel@danielyoung.io).",
+    )
+    inbox_dryrun.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="Maximum recent messages to classify (1-100).",
+    )
+    inbox_dryrun.set_defaults(func=cmd_inbox_dryrun)
+
+    inbox_dryrun_log = subparsers.add_parser(
+        "inbox-dryrun-log",
+        help="Show the persisted dry-run classification log for an account.",
+    )
+    inbox_dryrun_log.add_argument(
+        "--account",
+        default="daniel@danielyoung.io",
+        help="Connected account email (default: daniel@danielyoung.io).",
+    )
+    inbox_dryrun_log.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="Maximum log entries to return (1-100).",
+    )
+    inbox_dryrun_log.set_defaults(func=cmd_inbox_dryrun_log)
 
     return parser
 
