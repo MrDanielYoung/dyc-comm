@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import json
+import logging
 import os
 import secrets
 import uuid
@@ -12,6 +14,8 @@ import httpx
 from fastapi import Cookie, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+
+logger = logging.getLogger("dyc_comm.auth")
 
 AUTH_COOKIE = "dyc_auth_state"
 PKCE_COOKIE = "dyc_auth_pkce"
@@ -53,6 +57,10 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     ("MICROSOFT_ENTRA_CLIENT_SECRET", True),
     ("MICROSOFT_ENTRA_REDIRECT_URI", False),
     ("KEY_VAULT_REFS_ENABLED", False),
+    # Allow-list controls for the OAuth callback. Both are non-secret;
+    # /config-check reports presence only (never values).
+    ("ALLOWED_MICROSOFT_TENANT_IDS", False),
+    ("ALLOWED_ACCOUNT_EMAILS", False),
 )
 
 
@@ -66,6 +74,65 @@ def _split_csv_env(name: str) -> list[str]:
     if not raw:
         return []
     return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+def _normalize_id(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def _allowed_tenant_ids() -> set[str]:
+    """Tenants permitted to complete the OAuth callback.
+
+    Default-deny posture: when ``ALLOWED_MICROSOFT_TENANT_IDS`` is not set
+    we fall back to the single ``MICROSOFT_ENTRA_TENANT_ID`` configured for
+    the app. External tenants must be opted in explicitly via the env var.
+    Returning an empty set causes every callback to be rejected, which is
+    the safe failure mode.
+    """
+    explicit = {_normalize_id(v) for v in _split_csv_env("ALLOWED_MICROSOFT_TENANT_IDS")}
+    if explicit:
+        return {v for v in explicit if v}
+    home = _normalize_id(os.getenv("MICROSOFT_ENTRA_TENANT_ID"))
+    return {home} if home else set()
+
+
+def _allowed_account_emails() -> set[str]:
+    """Email allow-list. Empty set means no per-email allow-list is enforced.
+
+    When set, only the listed addresses (matched case-insensitively against
+    Graph ``mail`` / ``userPrincipalName`` / ID token ``preferred_username``)
+    may complete sign-in, even if their tenant id is allow-listed.
+    """
+    return {_normalize_id(v) for v in _split_csv_env("ALLOWED_ACCOUNT_EMAILS") if v}
+
+
+def _decode_id_token_claims(id_token: str | None) -> dict[str, Any]:
+    """Decode JWT payload without signature verification.
+
+    The ID token here is consumed only to read authorization attributes
+    (``tid``, ``preferred_username``) AFTER a successful exchange against
+    Microsoft's token endpoint, which already authenticated the client
+    over TLS using the client secret. We do not use it as proof of
+    authentication. If the payload cannot be parsed we return ``{}`` and
+    the caller falls back to Graph-derived identity, which on its own is
+    not sufficient to assert tenant — callers must therefore reject the
+    sign-in when ``tid`` cannot be established.
+    """
+    if not id_token:
+        return {}
+    try:
+        parts = id_token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        padding = "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(payload + padding)
+        claims = json.loads(decoded)
+        if isinstance(claims, dict):
+            return claims
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return {}
 
 
 def _require_env(name: str) -> str:
@@ -142,8 +209,26 @@ def _code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
 
+def _authorize_tenant_segment() -> str:
+    """Pick the tenant segment for the /authorize URL.
+
+    When the operator has explicitly allow-listed more than one tenant we
+    must ask Microsoft to authorize against ``/organizations`` so external
+    tenant users can complete sign-in (the Entra app must also be marked
+    multi-tenant in the portal — see docs/auth-troubleshooting.md). When
+    only the home tenant is allow-listed we keep using its tenant id, so a
+    misconfigured single-tenant app cannot accidentally accept tokens from
+    other tenants even if ``/common`` would have been resolvable.
+    """
+    home = _normalize_id(os.getenv("MICROSOFT_ENTRA_TENANT_ID"))
+    allowed = _allowed_tenant_ids()
+    if allowed and (allowed - {home}):
+        return "organizations"
+    return _require_env("MICROSOFT_ENTRA_TENANT_ID")
+
+
 def _authorize_url(state: str, code_challenge: str, login_hint: str | None = None) -> str:
-    tenant_id = _require_env("MICROSOFT_ENTRA_TENANT_ID")
+    tenant_segment = _authorize_tenant_segment()
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
     params: dict[str, str] = {
@@ -160,7 +245,7 @@ def _authorize_url(state: str, code_challenge: str, login_hint: str | None = Non
     if login_hint:
         params["login_hint"] = login_hint
     return (
-        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize?"
+        f"https://login.microsoftonline.com/{tenant_segment}/oauth2/v2.0/authorize?"
         f"{urlencode(params)}"
     )
 
@@ -172,11 +257,11 @@ def _web_redirect(status: str, **params: str) -> str:
 
 
 async def _exchange_code(code: str, verifier: str) -> dict[str, Any]:
-    tenant_id = _require_env("MICROSOFT_ENTRA_TENANT_ID")
+    tenant_segment = _authorize_tenant_segment()
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     client_secret = _require_env("MICROSOFT_ENTRA_CLIENT_SECRET")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_url = f"https://login.microsoftonline.com/{tenant_segment}/oauth2/v2.0/token"
     payload = {
         "client_id": client_id,
         "client_secret": client_secret,
@@ -268,18 +353,36 @@ def _session_payload(
         name: {"present": bool(os.getenv(name)), "is_secret": is_secret}
         for name, is_secret in _RUNTIME_VARIABLES
     }
+    # Required-presence check ignores the optional allow-list controls so
+    # an unset ALLOWED_ACCOUNT_EMAILS does not flag config as incomplete.
+    # ALLOWED_MICROSOFT_TENANT_IDS is also optional (we fall back to the
+    # configured home tenant). Both are still surfaced under `variables`
+    # so /config-check operators can see whether they are wired up.
+    optional_vars = {"ALLOWED_MICROSOFT_TENANT_IDS", "ALLOWED_ACCOUNT_EMAILS"}
+    required_present = all(v["present"] for k, v in variables.items() if k not in optional_vars)
+    allowed_tenant_ids = _allowed_tenant_ids()
+    allow_list = {
+        "tenant_allow_list_configured": bool(_split_csv_env("ALLOWED_MICROSOFT_TENANT_IDS")),
+        "tenant_allow_list_count": len(allowed_tenant_ids),
+        "email_allow_list_configured": bool(_allowed_account_emails()),
+        "email_allow_list_count": len(_allowed_account_emails()),
+        "multi_tenant_authorize": bool(
+            allowed_tenant_ids - {_normalize_id(os.getenv("MICROSOFT_ENTRA_TENANT_ID"))}
+        ),
+    }
     return {
         "environment": settings.app_env,
         "web_app_url": settings.web_app_url,
         "api_base_url": settings.api_base_url,
         "variables": variables,
-        "all_required_present": all(v["present"] for v in variables.values()),
+        "all_required_present": required_present,
         "has_database_url": variables["DATABASE_URL"]["present"],
         "has_entra_client_id": variables["MICROSOFT_ENTRA_CLIENT_ID"]["present"],
         "has_entra_tenant_id": variables["MICROSOFT_ENTRA_TENANT_ID"]["present"],
         "has_entra_client_secret": variables["MICROSOFT_ENTRA_CLIENT_SECRET"]["present"],
         "has_entra_redirect_uri": variables["MICROSOFT_ENTRA_REDIRECT_URI"]["present"],
         "key_vault_refs_enabled": settings.key_vault_refs_enabled,
+        "auth_allow_list": allow_list,
         "linked_account": linked_account,
         "mailbox_access_ready": bool(linked_account and linked_account.get("has_refresh_token")),
     }
@@ -347,6 +450,103 @@ def _expires_at(token_response: dict[str, Any]) -> datetime | None:
     if not expires_in:
         return None
     return _utcnow() + timedelta(seconds=int(expires_in))
+
+
+@dataclass(frozen=True)
+class AuthorizedIdentity:
+    email: str
+    tenant_id: str
+    upn: str | None
+
+
+def _authorize_callback_identity(
+    token_response: dict[str, Any], profile: dict[str, Any]
+) -> AuthorizedIdentity:
+    """Enforce the tenant/email allow-list against the post-exchange identity.
+
+    Raises HTTPException(403) when the identity is not allow-listed. The
+    callback handler relies on this raising before any token-persistence
+    code path runs, so unauthorized accounts never land in the DB.
+
+    Identity sources, in order of trust:
+
+    * ``tid`` and ``preferred_username`` from the ID token payload. The
+      payload is read without verifying the signature, but the ID token
+      itself was just delivered over TLS by Microsoft's token endpoint
+      after a confidential-client exchange (client secret + PKCE), so the
+      claims are treated as authorization *attributes* of the principal
+      whose code we just redeemed — not as standalone proof of identity.
+    * Graph ``/me`` ``mail`` / ``userPrincipalName`` for the canonical
+      email when the ID token did not carry ``preferred_username``.
+
+    A missing ``tid`` is treated as a hard failure: we cannot authorize a
+    tenant we cannot identify, so the safest action is to reject.
+    """
+    claims = _decode_id_token_claims(token_response.get("id_token"))
+    tenant_id = _normalize_id(claims.get("tid"))
+
+    email_candidates = [
+        profile.get("mail"),
+        profile.get("userPrincipalName"),
+        claims.get("preferred_username"),
+        claims.get("upn"),
+        claims.get("email"),
+    ]
+    email = next((value for value in email_candidates if value), None)
+    if not email:
+        logger.warning("auth.callback.denied reason=missing_email")
+        raise HTTPException(status_code=403, detail="Sign-in denied: missing account email.")
+
+    normalized_email = _normalize_id(email)
+
+    if not tenant_id:
+        logger.warning("auth.callback.denied reason=missing_tid email=%s", normalized_email)
+        raise HTTPException(
+            status_code=403,
+            detail="Sign-in denied: tenant id (tid) could not be established from the token.",
+        )
+
+    allowed_tenants = _allowed_tenant_ids()
+    if not allowed_tenants:
+        logger.error(
+            "auth.callback.denied reason=no_tenant_allow_list_configured email=%s tid=%s",
+            normalized_email,
+            tenant_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Sign-in denied: no tenant allow-list is configured on the API. "
+                "Set ALLOWED_MICROSOFT_TENANT_IDS or MICROSOFT_ENTRA_TENANT_ID."
+            ),
+        )
+
+    if tenant_id not in allowed_tenants:
+        logger.warning(
+            "auth.callback.denied reason=tenant_not_allowed email=%s tid=%s",
+            normalized_email,
+            tenant_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Sign-in denied: tenant {tenant_id} is not allow-listed.",
+        )
+
+    allowed_emails = _allowed_account_emails()
+    if allowed_emails and normalized_email not in allowed_emails:
+        logger.warning(
+            "auth.callback.denied reason=email_not_allowed email=%s tid=%s",
+            normalized_email,
+            tenant_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"Sign-in denied: account {email} is not allow-listed.",
+        )
+
+    logger.info("auth.callback.allowed email=%s tid=%s", normalized_email, tenant_id)
+    upn = claims.get("upn") or claims.get("preferred_username") or profile.get("userPrincipalName")
+    return AuthorizedIdentity(email=email, tenant_id=tenant_id, upn=upn)
 
 
 def _extract_account_identity(profile: dict[str, Any]) -> tuple[str, str, str]:
@@ -696,10 +896,10 @@ def _update_account_tokens(account_id: str, token_response: dict[str, Any]) -> N
 
 
 async def _refresh_access_token(refresh_token: str) -> dict[str, Any]:
-    tenant_id = _require_env("MICROSOFT_ENTRA_TENANT_ID")
+    tenant_segment = _authorize_tenant_segment()
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     client_secret = _require_env("MICROSOFT_ENTRA_CLIENT_SECRET")
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_url = f"https://login.microsoftonline.com/{tenant_segment}/oauth2/v2.0/token"
     payload = {
         "client_id": client_id,
         "client_secret": client_secret,
@@ -991,6 +1191,9 @@ async def microsoft_callback(
 
     token_response = await _exchange_code(code, stored_verifier)
     profile = await _graph_profile(token_response["access_token"])
+    # Enforce the tenant/email allow-list before any token persistence so
+    # unauthorized accounts never land in the database. Raises 403 on deny.
+    _authorize_callback_identity(token_response, profile)
     linked_account = _persist_microsoft_account(profile, token_response)
     email = linked_account["email"]
     display_name = linked_account["display_name"]
@@ -1694,7 +1897,14 @@ def alerts(
         ]
 
     runtime_present = all(
-        bool(os.getenv(name)) for name, _ in _RUNTIME_VARIABLES if name != "KEY_VAULT_REFS_ENABLED"
+        bool(os.getenv(name))
+        for name, _ in _RUNTIME_VARIABLES
+        if name
+        not in {
+            "KEY_VAULT_REFS_ENABLED",
+            "ALLOWED_MICROSOFT_TENANT_IDS",
+            "ALLOWED_ACCOUNT_EMAILS",
+        }
     )
 
     items = _compute_alerts(accounts, runtime_present)
