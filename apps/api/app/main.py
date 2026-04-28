@@ -1303,9 +1303,7 @@ def _extract_body_preview(message: dict[str, Any]) -> str:
     return ""
 
 
-async def _list_recent_messages(
-    access_token: str, limit: int
-) -> list[dict[str, Any]]:
+async def _list_recent_messages(access_token: str, limit: int) -> list[dict[str, Any]]:
     """Fetch a recent batch of messages from /me/messages (read-only).
 
     The selected fields are the minimum required by the dashboard log:
@@ -1341,7 +1339,8 @@ def _folder_display_name_for_id(account_id: str, provider_folder_id: str | None)
 
 
 def _persist_message_metadata(
-    account_id: str, message: dict[str, Any]
+    account_id: str,
+    message: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     """Upsert a single message's metadata. Returns (row_id, normalized).
 
@@ -1597,9 +1596,7 @@ def _finish_dryrun_run(
         ) from exc
 
 
-def _load_dryrun_recommendations(
-    account_id: str, limit: int = 50
-) -> list[dict[str, Any]]:
+def _load_dryrun_recommendations(account_id: str, limit: int = 50) -> list[dict[str, Any]]:
     if not _database_url():
         return []
     _ensure_account_tables()
@@ -2004,9 +2001,7 @@ async def mail_folder_inventory(
     }
 
 
-def _resolve_target_account_email(
-    linked_email: str | None, requested_email: str | None
-) -> str:
+def _resolve_target_account_email(linked_email: str | None, requested_email: str | None) -> str:
     """Pick which mailbox the operator request acts on.
 
     Defaults to the signed-in session email when no explicit target is
@@ -2087,9 +2082,7 @@ async def ingest_messages_dry_run(
             normalized: dict[str, Any] | None = None
             try:
                 persisted_id, normalized = _persist_message_metadata(account_id, message)
-                decision = _classify_message_for_dryrun(
-                    normalized, provider_config=provider_config
-                )
+                decision = _classify_message_for_dryrun(normalized, provider_config=provider_config)
             except HTTPException as exc:
                 error_text = str(exc.detail)
             except Exception as exc:
@@ -2129,13 +2122,13 @@ async def ingest_messages_dry_run(
                     error=error_text,
                 )
 
+            message_summary = normalized or {
+                "provider_message_id": message.get("id"),
+                "subject": message.get("subject"),
+            }
             items.append(
                 {
-                    "message": normalized
-                    or {
-                        "provider_message_id": message.get("id"),
-                        "subject": message.get("subject"),
-                    },
+                    "message": message_summary,
                     "recommendation": decision.to_dict(),
                     "status": status,
                     "error": error_text,
@@ -2345,10 +2338,7 @@ def _summarize_dryrun_classify(account_id: str) -> dict[str, Any]:
     if not _database_url():
         return {
             "available": False,
-            "reason": (
-                "DATABASE_URL is not configured; dry-run ingest results are "
-                "not persisted."
-            ),
+            "reason": "DATABASE_URL is not configured; dry-run ingest results are not persisted.",
             "runs": 0,
             "messages_seen": 0,
             "recommendations": 0,

@@ -1823,9 +1823,7 @@ def test_ingest_dry_run_classifies_batch_without_provider(monkeypatch):
                 "from": {"emailAddress": {"address": "news@example.com", "name": "News"}},
                 "receivedDateTime": "2026-04-28T08:00:00Z",
                 "isRead": False,
-                "bodyPreview": (
-                    "This is a fairly long newsletter body, more than forty characters."
-                ),
+                "bodyPreview": "This is a fairly long newsletter body, more than forty characters.",
                 "parentFolderId": "inbox",
                 "webLink": "https://outlook.office.com/?i=1",
             },
