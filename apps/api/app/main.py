@@ -1104,3 +1104,292 @@ async def mail_folder_inventory(
         },
         "folders": folders,
     }
+
+
+# =========================================================================
+# Operations dashboard
+# =========================================================================
+#
+# The dashboard endpoints expose only metrics that can be honestly computed
+# from the current data model. Anything that requires ingestion or audit
+# tables that have not yet been populated is reported as `available: false`
+# with a `reason` explaining what instrumentation is missing. Do not fabricate
+# data here — surface honest empty states until the backing pipeline lands.
+# See docs/dashboard-instrumentation.md for the next instrumentation slice.
+
+PENDING_REASON_INGESTION = (
+    "Email ingestion is not yet implemented; no email_message rows are written. "
+    "Next step: connector worker that persists message metadata and timestamps."
+)
+PENDING_REASON_ACTIONS = (
+    "Mailbox actions are not yet logged; mailbox_action and audit_event tables "
+    "are defined in schema.md but not populated by the API/connector path."
+)
+
+
+def _list_user_accounts(user_email: str) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+
+    psycopg = _psycopg()
+    _ensure_account_tables()
+
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        ca.id,
+                        ca.provider,
+                        ca.email_address,
+                        COALESCE(ca.display_name, au.display_name, ca.email_address),
+                        ca.status,
+                        ca.refresh_token IS NOT NULL,
+                        ca.token_updated_at,
+                        ca.updated_at,
+                        ca.created_at
+                    FROM connected_account ca
+                    JOIN app_user au ON au.id = ca.user_id
+                    WHERE au.email = %s
+                    ORDER BY ca.updated_at DESC
+                    """,
+                    (user_email,),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load connected accounts from PostgreSQL.",
+        ) from exc
+
+    return [
+        {
+            "account_id": row[0],
+            "provider": row[1],
+            "email": row[2],
+            "display_name": row[3],
+            "status": row[4],
+            "has_refresh_token": row[5],
+            "token_updated_at": row[6].isoformat() if row[6] else None,
+            "updated_at": row[7].isoformat() if row[7] else None,
+            "created_at": row[8].isoformat() if row[8] else None,
+        }
+        for row in rows
+    ]
+
+
+def _summarize_folder_inventory(account_id: str) -> dict[str, Any]:
+    folders = _load_folder_inventory(account_id)
+    total = len(folders)
+    by_ownership: dict[str, int] = {}
+    dyc_targets = 0
+    for folder in folders:
+        ownership = folder.get("ownership") or "unknown"
+        by_ownership[ownership] = by_ownership.get(ownership, 0) + 1
+        if folder.get("is_dyc_target"):
+            dyc_targets += 1
+    return {
+        "available": True,
+        "total_folders": total,
+        "dyc_target_folders": dyc_targets,
+        "by_ownership": by_ownership,
+        "expected_dyc_target_count": len(DEFAULT_MVP_FOLDER_SPECS),
+        "is_bootstrapped": dyc_targets >= len(DEFAULT_MVP_FOLDER_SPECS),
+    }
+
+
+def _empty_volume_metrics() -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": PENDING_REASON_INGESTION,
+        "window_days": 7,
+        "messages_in": None,
+        "messages_processed": None,
+        "errors": None,
+        "by_day": [],
+    }
+
+
+def _empty_action_metrics() -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": PENDING_REASON_ACTIONS,
+        "window_days": 7,
+        "actions_recommended": None,
+        "actions_executed": None,
+        "actions_failed": None,
+        "last_action_at": None,
+    }
+
+
+def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
+    folder_summary = _summarize_folder_inventory(account_row["account_id"])
+    return {
+        "account": {
+            "account_id": account_row["account_id"],
+            "provider": account_row["provider"],
+            "email": account_row["email"],
+            "display_name": account_row["display_name"],
+            "status": account_row["status"],
+            "mailbox_access_ready": bool(account_row["has_refresh_token"]),
+            "token_updated_at": account_row["token_updated_at"],
+            "created_at": account_row["created_at"],
+            "updated_at": account_row["updated_at"],
+        },
+        "folder_inventory": folder_summary,
+        "email_volume": _empty_volume_metrics(),
+        "action_activity": _empty_action_metrics(),
+    }
+
+
+def _resolve_session_user_email(linked_email: str | None) -> str:
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+    return linked_email
+
+
+@app.get("/accounts")
+def list_accounts(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+    linked_name: str | None = Cookie(default=None, alias=NAME_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    if rows:
+        accounts = [
+            {
+                "account_id": row["account_id"],
+                "provider": row["provider"],
+                "email": row["email"],
+                "display_name": row["display_name"],
+                "status": row["status"],
+                "mailbox_access_ready": bool(row["has_refresh_token"]),
+                "token_updated_at": row["token_updated_at"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+    else:
+        # No DB persistence — fall back to the cookie-only view so callers can
+        # still see the active session account without inventing data.
+        accounts = [
+            {
+                "account_id": None,
+                "provider": MICROSOFT_PROVIDER,
+                "email": user_email,
+                "display_name": linked_name or user_email,
+                "status": "session_only",
+                "mailbox_access_ready": False,
+                "token_updated_at": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ]
+    return {
+        "user": {"email": user_email},
+        "accounts": accounts,
+    }
+
+
+@app.get("/dashboard/summary")
+def dashboard_summary(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+    linked_name: str | None = Cookie(default=None, alias=NAME_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+
+    if rows:
+        per_account = [_account_dashboard_payload(row) for row in rows]
+    else:
+        # No persisted accounts for this user — describe the session-only view
+        # so the dashboard can render an honest "linked but not persisted"
+        # state instead of fabricating numbers.
+        per_account = [
+            {
+                "account": {
+                    "account_id": None,
+                    "provider": MICROSOFT_PROVIDER,
+                    "email": user_email,
+                    "display_name": linked_name or user_email,
+                    "status": "session_only",
+                    "mailbox_access_ready": False,
+                    "token_updated_at": None,
+                    "created_at": None,
+                    "updated_at": None,
+                },
+                "folder_inventory": {
+                    "available": False,
+                    "reason": (
+                        "No connected_account row for this session — DATABASE_URL "
+                        "may not be configured, or the OAuth flow has not run "
+                        "with persistence enabled."
+                    ),
+                    "total_folders": 0,
+                    "dyc_target_folders": 0,
+                    "by_ownership": {},
+                    "expected_dyc_target_count": len(DEFAULT_MVP_FOLDER_SPECS),
+                    "is_bootstrapped": False,
+                },
+                "email_volume": _empty_volume_metrics(),
+                "action_activity": _empty_action_metrics(),
+            }
+        ]
+
+    totals = {
+        "connected_accounts": len(per_account),
+        "mailbox_ready_accounts": sum(
+            1 for entry in per_account if entry["account"]["mailbox_access_ready"]
+        ),
+        "total_folders": sum(
+            entry["folder_inventory"].get("total_folders") or 0 for entry in per_account
+        ),
+        "dyc_target_folders": sum(
+            entry["folder_inventory"].get("dyc_target_folders") or 0 for entry in per_account
+        ),
+    }
+
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "user": {"email": user_email},
+        "totals": totals,
+        "accounts": per_account,
+        "pending_instrumentation": [
+            {
+                "metric": "email_volume",
+                "reason": PENDING_REASON_INGESTION,
+            },
+            {
+                "metric": "action_activity",
+                "reason": PENDING_REASON_ACTIONS,
+            },
+        ],
+    }
+
+
+@app.get("/accounts/{email}/dashboard")
+def account_dashboard(
+    email: str,
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+
+    target = next((row for row in rows if row["email"].lower() == email.lower()), None)
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail="No connected account with that email is linked to this session.",
+        )
+
+    return {
+        "generated_at": _utcnow().isoformat(),
+        "user": {"email": user_email},
+        **_account_dashboard_payload(target),
+        "pending_instrumentation": [
+            {"metric": "email_volume", "reason": PENDING_REASON_INGESTION},
+            {"metric": "action_activity", "reason": PENDING_REASON_ACTIONS},
+        ],
+    }
