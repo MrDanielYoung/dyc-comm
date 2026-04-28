@@ -77,26 +77,54 @@
         min-width: 0;
       }
 
-      .brand-icon {
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        flex: 0 0 auto;
-      }
-
       .brand-wordmark {
-        height: 18px;
+        height: 22px;
         width: auto;
+        display: block;
       }
 
-      .topbar-note {
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .topbar-account {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: flex-end;
+        line-height: 1.1;
+        min-width: 0;
+        max-width: 220px;
+      }
+
+      .topbar-account-label {
         margin: 0;
-        color: var(--accent-deep);
-        font-size: 0.7rem;
-        font-weight: 600;
-        letter-spacing: 0.08em;
+        color: var(--muted);
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
         text-transform: uppercase;
+      }
+
+      .topbar-account-value {
+        margin: 0;
+        font-size: 0.86rem;
+        font-weight: 600;
+        color: var(--text);
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .topbar-button {
+        min-height: 38px;
+        padding: 8px 14px;
+        font-size: 0.85rem;
+        border-radius: 8px;
       }
 
       .layout {
@@ -139,39 +167,6 @@
         line-height: 1.02;
         letter-spacing: -0.025em;
         font-weight: 700;
-      }
-
-      .brand-strip {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .brand-strip-icon {
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-      }
-
-      .brand-strip-text {
-        display: grid;
-        gap: 2px;
-      }
-
-      .brand-strip-label {
-        margin: 0;
-        color: var(--accent-deep);
-        font-size: 0.68rem;
-        font-weight: 700;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-      }
-
-      .brand-strip-value {
-        margin: 0;
-        font-size: 0.82rem;
-        font-weight: 600;
-        color: var(--muted);
       }
 
       .action-row {
@@ -611,8 +606,14 @@
           border-radius: 24px;
         }
 
-        .topbar-note {
-          white-space: normal;
+        .topbar-actions {
+          width: 100%;
+          justify-content: flex-start;
+        }
+
+        .topbar-account {
+          align-items: flex-start;
+          max-width: 100%;
         }
 
         .connect-panel,
@@ -627,12 +628,30 @@
   <body>
     <main>
       <div class="shell">
-        <header class="topbar">
+        <header class="topbar" data-testid="app-header">
           <div class="brand">
-            <img class="brand-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
             <img class="brand-wordmark" src="/assets/dy-wordmark.png?v=20260426b" alt="Daniel Young">
           </div>
-          <p class="topbar-note" id="topbarNote">Mailbox setup console</p>
+          <div class="topbar-actions" data-testid="header-auth-actions">
+            <div class="topbar-account" id="headerAccount" data-testid="header-account" hidden>
+              <p class="topbar-account-label">Signed in</p>
+              <p class="topbar-account-value" id="headerAccountValue">—</p>
+            </div>
+            <a
+              class="button-link primary topbar-button"
+              id="headerSignInLink"
+              data-testid="header-sign-in"
+              href="#"
+              hidden
+            >Sign in with Microsoft</a>
+            <button
+              class="secondary topbar-button"
+              id="headerSignOutButton"
+              data-testid="header-sign-out"
+              type="button"
+              hidden
+            >Sign out</button>
+          </div>
         </header>
 
         <section class="panel gate" id="gateView" aria-live="polite">
@@ -654,18 +673,10 @@
           <div class="shell">
             <section class="layout">
               <section class="panel connect-panel">
-                <div class="brand-strip">
-                  <img class="brand-strip-icon" src="/assets/dy-icon.png?v=20260426b" alt="Daniel Young icon">
-                  <div class="brand-strip-text">
-                    <p class="brand-strip-label">Daniel Young</p>
-                    <p class="brand-strip-value">Mailbox setup</p>
-                  </div>
-                </div>
                 <div class="eyebrow">Microsoft 365</div>
                 <h1>Mailbox console</h1>
                 <div class="action-row">
                   <button class="secondary" id="refreshButton" type="button">Refresh</button>
-                  <button class="secondary" id="signOutButton" type="button">Sign out</button>
                 </div>
                 <p class="notice" id="authNotice">
                   Sign-in status and runtime errors appear here.
@@ -806,7 +817,10 @@
 
       const appView = document.getElementById("appView");
       const refreshButton = document.getElementById("refreshButton");
-      const signOutButton = document.getElementById("signOutButton");
+      const headerSignInLink = document.getElementById("headerSignInLink");
+      const headerSignOutButton = document.getElementById("headerSignOutButton");
+      const headerAccount = document.getElementById("headerAccount");
+      const headerAccountValue = document.getElementById("headerAccountValue");
       const authNotice = document.getElementById("authNotice");
       const statusChip = document.getElementById("statusChip");
       const linkedEmail = document.getElementById("linkedEmail");
@@ -828,10 +842,27 @@
 
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
+      headerSignInLink.href = SIGN_IN_URL;
+
+      function setHeaderUnauthenticated() {
+        headerAccount.hidden = true;
+        headerAccountValue.textContent = "—";
+        headerSignOutButton.hidden = true;
+        headerSignInLink.hidden = false;
+      }
+
+      function setHeaderAuthenticated(account) {
+        headerSignInLink.hidden = true;
+        headerSignOutButton.hidden = false;
+        const label = (account && (account.email || account.display_name)) || "Signed in";
+        headerAccountValue.textContent = label;
+        headerAccount.hidden = false;
+      }
 
       function showGate({ chip, chipClass, title, copy, notice, noticeIsError }) {
         appView.hidden = true;
         gateView.hidden = false;
+        setHeaderUnauthenticated();
         if (chip) {
           gateChip.textContent = chip;
           gateChip.className = `status-chip ${chipClass || "locked"}`;
@@ -850,9 +881,10 @@
         clearMailboxView();
       }
 
-      function showApp() {
+      function showApp(account) {
         gateView.hidden = true;
         appView.hidden = false;
+        setHeaderAuthenticated(account);
       }
 
       function disableMailboxActions() {
@@ -1044,7 +1076,7 @@
           return;
         }
 
-        showApp();
+        showApp(account);
         setStatus(true, account.email, account.display_name, true);
         setReadiness(apiReachability, true);
         setReadiness(
@@ -1119,7 +1151,7 @@
 
       gateRetryButton.addEventListener("click", () => evaluateSession({ initial: true }));
       refreshButton.addEventListener("click", () => evaluateSession({ initial: false }));
-      signOutButton.addEventListener("click", signOut);
+      headerSignOutButton.addEventListener("click", signOut);
       sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
       foldersButton.addEventListener("click", async () => {
         const payload = await safeCallApi("Folders", "/mail/folders");
