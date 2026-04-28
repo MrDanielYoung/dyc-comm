@@ -1369,7 +1369,7 @@
             <span class="login-logo-text">Microsoft</span>
           </div>
           <h1 class="login-title" id="gateTitle">Sign in</h1>
-          <p class="login-subtitle" id="gateCopy">Private app — authorized account only.</p>
+          <p class="login-subtitle" id="gateCopy">Use your Microsoft account to continue.</p>
           <a
             class="login-button"
             id="gateConnectLink"
@@ -1927,6 +1927,8 @@
 
       const API_BASE = inferApiBase();
       const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+      const PRIMARY_LOGIN_HINT = "daniel@danielyoung.io";
+      const PRIMARY_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(PRIMARY_LOGIN_HINT)}`;
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
 
@@ -2006,8 +2008,8 @@
       };
 
       apiBaseText.textContent = API_BASE;
-      gateConnectLink.href = SIGN_IN_URL;
-      headerSignInLink.href = SIGN_IN_URL;
+      gateConnectLink.href = PRIMARY_SIGN_IN_URL;
+      headerSignInLink.href = PRIMARY_SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
       accountNavConnectLink.href = DHW_SIGN_IN_URL;
@@ -2889,7 +2891,7 @@
           showGate({
             chip: "Checking session…",
             title: "Sign in",
-            copy: "Private app — authorized account only."
+            copy: "Use your Microsoft account to continue."
           });
         }
 
@@ -2900,7 +2902,7 @@
           showGate({
             chip: "API unreachable",
             title: "Sign in",
-            copy: "Private app — authorized account only.",
+            copy: "Use your Microsoft account to continue.",
             notice: `API request failed: ${error.message}`
           });
           return;
@@ -2911,7 +2913,7 @@
           showGate({
             chip: "Sign-in required",
             title: "Sign in",
-            copy: "Private app — authorized account only."
+            copy: "Use your Microsoft account to continue."
           });
           return;
         }
@@ -2981,7 +2983,7 @@
         showGate({
           chip: "Signed out",
           title: "Sign in",
-          copy: "Private app — authorized account only."
+          copy: "Use your Microsoft account to continue."
         });
       }
 

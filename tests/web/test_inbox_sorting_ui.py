@@ -86,3 +86,44 @@ def test_default_login_hint_is_daniel_at_danielyoung_io():
     # signs in as daniel@danielyoung.io for the bring-up — make sure that
     # email is referenced in the page so the operator path stays documented.
     assert "danielyoung.io" in html
+
+
+def test_primary_sign_in_uses_danielyoung_io_login_hint():
+    html = _read_html()
+    # The gate / header "Sign in with Microsoft" CTA should pre-fill the
+    # primary tenant account so operators land on the right Microsoft
+    # picker without typing.
+    assert 'PRIMARY_LOGIN_HINT = "daniel@danielyoung.io"' in html
+    assert "gateConnectLink.href = PRIMARY_SIGN_IN_URL" in html
+    assert "headerSignInLink.href = PRIMARY_SIGN_IN_URL" in html
+
+
+def test_login_screen_does_not_show_private_app_warning():
+    html = _read_html()
+    # The login UI should feel like a standard Microsoft sign-in, not a
+    # gated private-app warning.
+    assert "Private app" not in html
+    assert "authorized account only" not in html
+
+
+def test_noindex_meta_is_preserved():
+    html = _read_html()
+    # Security/SEO posture: the app must remain unindexed.
+    assert 'name="robots"' in html
+    assert "noindex" in html
+
+
+def test_dhw_connect_button_keeps_dhw_login_hint():
+    html = _read_html()
+    # DHW add-account flow must keep its own login_hint so operators can
+    # link the digitalhealthworks.com mailbox without retyping.
+    assert 'DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com"' in html
+    assert "connectDhwLink.href = DHW_SIGN_IN_URL" in html
+    assert "accountNavConnectLink.href = DHW_SIGN_IN_URL" in html
+
+
+def test_generic_connect_account_link_has_no_login_hint():
+    html = _read_html()
+    # "Connect a different account" must hit /auth/microsoft/start with no
+    # hint so external tenants (e.g. BoldWorks) can still complete sign-in.
+    assert "connectGenericLink.href = SIGN_IN_URL" in html
