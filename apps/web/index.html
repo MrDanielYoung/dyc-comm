@@ -618,19 +618,12 @@
       }
 
       .login-title {
-        margin: 24px 0 12px;
+        margin: 24px 0 28px;
         font-size: 1.5rem;
         font-weight: 600;
         line-height: 1.25;
         color: #1b1b1b;
         letter-spacing: -0.005em;
-      }
-
-      .login-subtitle {
-        margin: 0 0 28px;
-        font-size: 0.9rem;
-        line-height: 1.5;
-        color: #5e5e5e;
       }
 
       .login-button {
@@ -1369,7 +1362,6 @@
             <span class="login-logo-text">Microsoft</span>
           </div>
           <h1 class="login-title" id="gateTitle">Sign in</h1>
-          <p class="login-subtitle" id="gateCopy">Private app — authorized account only.</p>
           <a
             class="login-button"
             id="gateConnectLink"
@@ -1963,6 +1955,8 @@
 
       const API_BASE = inferApiBase();
       const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+      const PRIMARY_LOGIN_HINT = "daniel@danielyoung.io";
+      const PRIMARY_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(PRIMARY_LOGIN_HINT)}`;
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
 
@@ -1970,7 +1964,6 @@
       const gateView = document.getElementById("gateView");
       const gateChip = document.getElementById("gateChip");
       const gateTitle = document.getElementById("gateTitle");
-      const gateCopy = document.getElementById("gateCopy");
       const gateNotice = document.getElementById("gateNotice");
       const gateConnectLink = document.getElementById("gateConnectLink");
       const gateRetryButton = document.getElementById("gateRetryButton");
@@ -2095,8 +2088,8 @@
       }
 
       apiBaseText.textContent = API_BASE;
-      gateConnectLink.href = SIGN_IN_URL;
-      headerSignInLink.href = SIGN_IN_URL;
+      gateConnectLink.href = PRIMARY_SIGN_IN_URL;
+      headerSignInLink.href = PRIMARY_SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
       accountNavConnectLink.href = DHW_SIGN_IN_URL;
@@ -2116,7 +2109,7 @@
         headerAccount.hidden = false;
       }
 
-      function showGate({ chip, title, copy, notice }) {
+      function showGate({ chip, title, notice }) {
         appView.hidden = true;
         gateView.hidden = false;
         appHeader.hidden = true;
@@ -2126,7 +2119,6 @@
           gateChip.textContent = chip;
         }
         if (title) gateTitle.textContent = title;
-        if (copy) gateCopy.textContent = copy;
         if (notice) {
           gateNotice.textContent = notice;
           gateNotice.hidden = false;
@@ -2999,8 +2991,7 @@
         if (initial) {
           showGate({
             chip: "Checking session…",
-            title: "Sign in",
-            copy: "Private app — authorized account only."
+            title: "Sign in"
           });
         }
 
@@ -3011,7 +3002,6 @@
           showGate({
             chip: "API unreachable",
             title: "Sign in",
-            copy: "Private app — authorized account only.",
             notice: `API request failed: ${error.message}`
           });
           return;
@@ -3021,8 +3011,7 @@
         if (!account) {
           showGate({
             chip: "Sign-in required",
-            title: "Sign in",
-            copy: "Private app — authorized account only."
+            title: "Sign in"
           });
           return;
         }
@@ -3031,8 +3020,7 @@
           showGate({
             chip: "Re-authentication required",
             title: "Sign in",
-            copy: "Mailbox access expired — sign in again to continue.",
-            notice: `Linked account: ${account.email}`
+            notice: `Linked account: ${account.email} — mailbox access expired, sign in again to continue.`
           });
           return;
         }
@@ -3091,8 +3079,7 @@
         }
         showGate({
           chip: "Signed out",
-          title: "Sign in",
-          copy: "Private app — authorized account only."
+          title: "Sign in"
         });
       }
 
@@ -3118,8 +3105,7 @@
         showGate({
           chip: "Sign-in failed",
           title: "Sign in",
-          copy: "Microsoft sign-in did not complete. Try again.",
-          notice: reason
+          notice: `Microsoft sign-in did not complete: ${reason}`
         });
       }
 
