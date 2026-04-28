@@ -31,7 +31,7 @@ jobs:
         run: ruff check apps tests
 
       - name: Format check (ruff format)
-        run: ruff format --check apps tests
+        run: ruff format --check --diff apps tests
 
       - name: Run tests
         run: pytest
