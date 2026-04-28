@@ -36,6 +36,19 @@ jobs:
           set +e
           ruff format --check --diff apps tests > ruff-format.diff 2>&1
           rc=$?
+          if [ $rc -ne 0 ]; then
+            # Surface the diff in the workflow summary so we can read it
+            # without needing to download artifacts or stream blob logs.
+            echo "## ruff format diff" >> $GITHUB_STEP_SUMMARY
+            echo '```diff' >> $GITHUB_STEP_SUMMARY
+            head -800 ruff-format.diff >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            # Also surface a one-line summary as an error annotation so
+            # the failed-files list is visible from the run page.
+            grep -E '^Would reformat:' ruff-format.diff | while read -r line; do
+              echo "::error::$line"
+            done
+          fi
           exit $rc
 
       - name: Upload ruff format diff
