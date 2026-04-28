@@ -11,9 +11,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import Cookie, FastAPI, HTTPException, Query, Response
+from fastapi import Body, Cookie, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+
+from apps.api.app import classifier as classifier_module
 
 logger = logging.getLogger("dyc_comm.auth")
 
@@ -61,6 +63,34 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     # /config-check reports presence only (never values).
     ("ALLOWED_MICROSOFT_TENANT_IDS", False),
     ("ALLOWED_ACCOUNT_EMAILS", False),
+    # Azure OpenAI / Azure AI provider scaffolding for the dry-run AI
+    # classifier. All optional: the deterministic classifier runs without
+    # any of these set. /config-check reports presence only.
+    ("AZURE_OPENAI_ENDPOINT", False),
+    ("AZURE_OPENAI_DEPLOYMENT", False),
+    ("AZURE_OPENAI_API_VERSION", False),
+    ("AZURE_OPENAI_API_KEY", True),
+    ("AZURE_AI_ENDPOINT", False),
+    ("AZURE_AI_DEPLOYMENT", False),
+    ("AZURE_AI_API_KEY", True),
+)
+
+# Env vars that are optional / advisory. Their absence must NOT cause
+# /config-check to flag the runtime as not-ready. Mirrored in the alerts
+# computation at the bottom of this file.
+_OPTIONAL_RUNTIME_VARIABLES: frozenset[str] = frozenset(
+    {
+        "KEY_VAULT_REFS_ENABLED",
+        "ALLOWED_MICROSOFT_TENANT_IDS",
+        "ALLOWED_ACCOUNT_EMAILS",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_DEPLOYMENT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_ENDPOINT",
+        "AZURE_AI_DEPLOYMENT",
+        "AZURE_AI_API_KEY",
+    }
 )
 
 
@@ -353,12 +383,11 @@ def _session_payload(
         name: {"present": bool(os.getenv(name)), "is_secret": is_secret}
         for name, is_secret in _RUNTIME_VARIABLES
     }
-    # Required-presence check ignores the optional allow-list controls so
-    # an unset ALLOWED_ACCOUNT_EMAILS does not flag config as incomplete.
-    # ALLOWED_MICROSOFT_TENANT_IDS is also optional (we fall back to the
-    # configured home tenant). Both are still surfaced under `variables`
+    # Required-presence check ignores optional / advisory controls so an
+    # unset ALLOWED_ACCOUNT_EMAILS or unset Azure AI provider does not flag
+    # config as incomplete. All vars are still surfaced under `variables`
     # so /config-check operators can see whether they are wired up.
-    optional_vars = {"ALLOWED_MICROSOFT_TENANT_IDS", "ALLOWED_ACCOUNT_EMAILS"}
+    optional_vars = _OPTIONAL_RUNTIME_VARIABLES
     required_present = all(v["present"] for k, v in variables.items() if k not in optional_vars)
     allowed_tenant_ids = _allowed_tenant_ids()
     allow_list = {
@@ -369,6 +398,15 @@ def _session_payload(
         "multi_tenant_authorize": bool(
             allowed_tenant_ids - {_normalize_id(os.getenv("MICROSOFT_ENTRA_TENANT_ID"))}
         ),
+    }
+    ai_provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
+    ai_provider = {
+        "selected": ai_provider_cfg.provider,
+        "configured": ai_provider_cfg.is_configured(),
+        "endpoint_present": bool(ai_provider_cfg.endpoint),
+        "deployment_present": bool(ai_provider_cfg.deployment),
+        "api_version_present": bool(ai_provider_cfg.api_version),
+        "api_key_present": ai_provider_cfg.has_api_key,
     }
     return {
         "environment": settings.app_env,
@@ -383,6 +421,7 @@ def _session_payload(
         "has_entra_redirect_uri": variables["MICROSOFT_ENTRA_REDIRECT_URI"]["present"],
         "key_vault_refs_enabled": settings.key_vault_refs_enabled,
         "auth_allow_list": allow_list,
+        "ai_provider": ai_provider,
         "linked_account": linked_account,
         "mailbox_access_ready": bool(linked_account and linked_account.get("has_refresh_token")),
     }
@@ -1124,6 +1163,63 @@ def health() -> dict[str, str]:
 @app.get("/config-check")
 def config_check() -> dict[str, Any]:
     return _session_payload()
+
+
+@app.post("/classify/recommend")
+def classify_recommend(payload: dict[str, Any] = Body(default=None)) -> dict[str, Any]:
+    """Dry-run AI classification recommendation.
+
+    This endpoint is intentionally read-only and does not move, delete, or
+    send any mail. It accepts a sanitized message payload and returns the
+    classifier's decision contract. Callers (or future workers) decide
+    whether to act on the recommendation; v1 always requires a human in
+    the loop for any mailbox-changing action.
+
+    Request body fields (all optional):
+
+    * ``subject`` (str)
+    * ``body`` (str)
+    * ``sender`` (str)
+    * ``is_thread_reply`` (bool)
+    * ``rule_category`` (str) — optional deterministic-rule hint
+    * ``rule_confidence`` (float, 0.0–1.0)
+
+    The response always contains ``recommended_folder``; low-confidence,
+    sensitive, legal/contractual, judgment-required, short, or
+    thread-flip messages are forced to ``10 - Review`` regardless of
+    other signals.
+    """
+    body = payload or {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be an object.")
+
+    try:
+        rule_confidence = float(body.get("rule_confidence", 0.0) or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="rule_confidence must be a number."
+        ) from exc
+
+    ci = classifier_module.ClassificationInput(
+        subject=str(body.get("subject") or ""),
+        body=str(body.get("body") or ""),
+        sender=str(body.get("sender") or ""),
+        is_thread_reply=bool(body.get("is_thread_reply") or False),
+        rule_category=(body.get("rule_category") or None),
+        rule_confidence=rule_confidence,
+    )
+    provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
+    decision = classifier_module.classify(ci, provider_config=provider_cfg)
+    return {
+        "dry_run": True,
+        "recommendation": decision.to_dict(),
+        "provider": {
+            "selected": provider_cfg.provider,
+            "configured": provider_cfg.is_configured(),
+        },
+        "policy_version": "v1.0",
+        "review_folder": classifier_module.REVIEW_FOLDER,
+    }
 
 
 @app.get("/auth/session")
@@ -1899,12 +1995,7 @@ def alerts(
     runtime_present = all(
         bool(os.getenv(name))
         for name, _ in _RUNTIME_VARIABLES
-        if name
-        not in {
-            "KEY_VAULT_REFS_ENABLED",
-            "ALLOWED_MICROSOFT_TENANT_IDS",
-            "ALLOWED_ACCOUNT_EMAILS",
-        }
+        if name not in _OPTIONAL_RUNTIME_VARIABLES
     )
 
     items = _compute_alerts(accounts, runtime_present)
