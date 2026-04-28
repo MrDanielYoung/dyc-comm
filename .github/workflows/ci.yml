@@ -28,10 +28,29 @@ jobs:
         run: python -m compileall apps/api/app
 
       - name: Lint (ruff)
-        run: ruff check apps tests
+        run: |
+          set +e
+          ruff check apps tests > /tmp/ruff-lint.txt 2>&1
+          rc=$?
+          echo "## Ruff lint output (rc=$rc)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ruff-lint.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ruff-lint.txt
+          exit $rc
 
       - name: Format check (ruff format)
-        run: ruff format --check apps tests
+        if: always()
+        run: |
+          set +e
+          ruff format --check apps tests > /tmp/ruff-format.txt 2>&1
+          rc=$?
+          echo "## Ruff format output (rc=$rc)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ruff-format.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ruff-format.txt
+          exit $rc
 
       - name: Run tests
         run: pytest
