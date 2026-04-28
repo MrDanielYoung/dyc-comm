@@ -586,6 +586,192 @@
         justify-content: center;
       }
 
+      .tab-nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 4px 14px rgba(20, 22, 27, 0.03);
+      }
+
+      .tab-button {
+        min-height: 38px;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--text);
+        font-size: 0.86rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .tab-button:hover {
+        background: rgba(74, 131, 197, 0.08);
+        transform: none;
+      }
+
+      .tab-button.active {
+        background: linear-gradient(180deg, var(--accent-mid) 0%, var(--accent-deep) 100%);
+        color: #fff;
+        box-shadow: 0 6px 14px rgba(52, 63, 145, 0.18);
+      }
+
+      .tab-button .tab-count {
+        display: inline-block;
+        margin-left: 6px;
+        padding: 1px 7px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        border-radius: 999px;
+        background: rgba(23, 22, 27, 0.08);
+        color: var(--muted);
+      }
+
+      .tab-button.active .tab-count {
+        background: rgba(255, 255, 255, 0.22);
+        color: #fff;
+      }
+
+      .add-account-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border: 1px dashed rgba(74, 131, 197, 0.4);
+        border-radius: 14px;
+        background: rgba(74, 131, 197, 0.05);
+      }
+
+      .add-account-card h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .add-account-card p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.45;
+      }
+
+      .add-account-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .activity-list,
+      .alerts-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .activity-event,
+      .alert-item {
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.78);
+        display: grid;
+        gap: 6px;
+      }
+
+      .activity-event-head,
+      .alert-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .activity-event-type {
+        font-weight: 600;
+        font-size: 0.92rem;
+      }
+
+      .activity-event-time,
+      .alert-scope {
+        font-size: 0.74rem;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+      }
+
+      .activity-event-meta {
+        margin: 0;
+        font-size: 0.78rem;
+        color: var(--muted);
+        line-height: 1.45;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        word-break: break-word;
+      }
+
+      .alert-item.severity-error {
+        border-color: rgba(181, 58, 44, 0.4);
+        background: rgba(181, 58, 44, 0.06);
+      }
+
+      .alert-item.severity-warning {
+        border-color: rgba(143, 90, 18, 0.4);
+        background: rgba(143, 90, 18, 0.05);
+      }
+
+      .alert-item.severity-info {
+        border-color: rgba(74, 131, 197, 0.3);
+        background: rgba(74, 131, 197, 0.04);
+      }
+
+      .alert-severity {
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 3px 10px;
+        border-radius: 999px;
+      }
+
+      .alert-severity.error {
+        background: rgba(181, 58, 44, 0.15);
+        color: var(--danger);
+      }
+
+      .alert-severity.warning {
+        background: rgba(143, 90, 18, 0.15);
+        color: var(--warning);
+      }
+
+      .alert-severity.info {
+        background: rgba(74, 131, 197, 0.15);
+        color: var(--accent-deep);
+      }
+
+      .alert-message {
+        margin: 0;
+        font-size: 0.9rem;
+        line-height: 1.4;
+      }
+
+      .alert-action {
+        margin: 0;
+        font-size: 0.8rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .pending-banner {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(143, 90, 18, 0.08);
+        border: 1px solid rgba(143, 90, 18, 0.25);
+        color: var(--warning);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
       .dashboard-panel {
         display: grid;
         gap: 16px;
@@ -783,146 +969,255 @@
 
         <div id="appView" hidden>
           <div class="shell">
-            <section class="layout">
-              <section class="panel connect-panel">
-                <div class="eyebrow">Microsoft 365</div>
-                <h1>Mailbox console</h1>
-                <div class="action-row">
-                  <button class="secondary" id="refreshButton" type="button">Refresh</button>
-                </div>
-                <p class="notice" id="authNotice">
-                  Sign-in status and runtime errors appear here.
-                </p>
-                <div class="info-grid">
-                  <div class="info-item">
-                    <p class="label">Linked account</p>
-                    <p class="value" id="linkedEmail">—</p>
-                  </div>
-                  <div class="info-item">
-                    <p class="label">Mailbox access</p>
-                    <p class="value" id="mailboxAccess">—</p>
-                  </div>
-                  <div class="info-item">
-                    <p class="label">API base</p>
-                    <p class="value"><code id="apiBaseText"></code></p>
-                  </div>
-                </div>
-              </section>
+            <nav class="tab-nav" role="tablist" data-testid="tab-nav">
+              <button
+                class="tab-button active"
+                type="button"
+                role="tab"
+                data-tab="dashboard"
+                id="tabDashboard"
+              >Dashboard</button>
+              <button
+                class="tab-button"
+                type="button"
+                role="tab"
+                data-tab="activity"
+                id="tabActivity"
+              >Activity Log<span class="tab-count" id="activityCount" hidden>0</span></button>
+              <button
+                class="tab-button"
+                type="button"
+                role="tab"
+                data-tab="alerts"
+                id="tabAlerts"
+              >Alerts<span class="tab-count" id="alertsCount" hidden>0</span></button>
+              <button
+                class="tab-button"
+                type="button"
+                role="tab"
+                data-tab="diagnostics"
+                id="tabDiagnostics"
+              >API / Diagnostics</button>
+            </nav>
 
-              <aside class="panel status-panel">
-                <span class="status-chip idle" id="statusChip">Checking connection state</span>
-                <h2 class="status-title">Current session</h2>
-                <p class="status-copy">
-                  Browser session state and backend readiness.
-                </p>
-                <div class="meta-grid">
-                  <div class="meta-card">
-                    <p class="label">Display name</p>
-                    <p class="value" id="linkedName">—</p>
+            <p class="notice" id="authNotice">
+              Sign-in status and runtime errors appear here.
+            </p>
+
+            <section class="tab-panel" id="tabPanelDashboard" data-tab-panel="dashboard">
+              <div class="shell">
+                <section class="panel section-panel dashboard-panel" data-testid="dashboard-panel">
+                  <h2 class="section-title">Operations dashboard</h2>
+                  <p class="empty-state">
+                    Live operational signals per connected account. Metrics tagged
+                    <span class="metric-tag pending">pending</span>
+                    require ingestion or audit instrumentation that is not yet wired up;
+                    they will stay empty until the connector pipeline lands.
+                  </p>
+                  <div class="dashboard-totals" id="dashboardTotals">
+                    <div class="dashboard-tile">
+                      <p class="label">Connected accounts</p>
+                      <p class="value" id="totalAccounts">—</p>
+                    </div>
+                    <div class="dashboard-tile">
+                      <p class="label">Mailbox-ready</p>
+                      <p class="value" id="totalReady">—</p>
+                    </div>
+                    <div class="dashboard-tile">
+                      <p class="label">Folders tracked</p>
+                      <p class="value" id="totalFolders">—</p>
+                    </div>
+                    <div class="dashboard-tile">
+                      <p class="label">DYC-target folders</p>
+                      <p class="value" id="totalDycTargets">—</p>
+                    </div>
                   </div>
-                  <div class="meta-card">
-                    <p class="label">Session state</p>
-                    <p class="value" id="sessionState">Checking</p>
+                  <div id="dashboardAccountList">
+                    <p class="empty-state">Loading dashboard…</p>
                   </div>
-                </div>
-              </aside>
+                </section>
+
+                <section
+                  class="add-account-card"
+                  data-testid="add-account-card"
+                >
+                  <h3>Add another Microsoft mailbox</h3>
+                  <p>
+                    Connect a second mailbox to manage it alongside the current
+                    account. The Microsoft sign-in is pre-filled with the chosen
+                    address; the user still chooses or confirms the account on
+                    Microsoft's side.
+                  </p>
+                  <div class="add-account-actions">
+                    <a
+                      class="button-link primary"
+                      id="addDhwAccountLink"
+                      data-testid="add-dhw-account"
+                      href="#"
+                    >Connect daniel.young@digitalhealthworks.com</a>
+                    <a
+                      class="button-link secondary"
+                      id="addAnyAccountLink"
+                      href="#"
+                    >Connect a different mailbox</a>
+                  </div>
+                </section>
+              </div>
             </section>
 
-            <section class="panel section-panel dashboard-panel" data-testid="dashboard-panel">
-              <h2 class="section-title">Operations dashboard</h2>
-              <p class="empty-state">
-                Live operational signals per connected account. Metrics tagged
-                <span class="metric-tag pending">pending</span>
-                require ingestion or audit instrumentation that is not yet wired up;
-                they will stay empty until the connector pipeline lands.
-              </p>
-              <div class="dashboard-totals" id="dashboardTotals">
-                <div class="dashboard-tile">
-                  <p class="label">Connected accounts</p>
-                  <p class="value" id="totalAccounts">—</p>
+            <section
+              class="tab-panel"
+              id="tabPanelActivity"
+              data-tab-panel="activity"
+              hidden
+            >
+              <section class="panel section-panel">
+                <h2 class="section-title">Activity log</h2>
+                <p class="empty-state" id="activityIntro">
+                  Movement of folders, accounts, and (eventually) messages,
+                  ordered newest first. Message-level moves and label changes
+                  will appear here as the connector worker lands.
+                </p>
+                <p class="pending-banner" id="activityPendingBanner" hidden></p>
+                <div class="activity-list" id="activityList">
+                  <p class="empty-state">Loading activity…</p>
                 </div>
-                <div class="dashboard-tile">
-                  <p class="label">Mailbox-ready</p>
-                  <p class="value" id="totalReady">—</p>
-                </div>
-                <div class="dashboard-tile">
-                  <p class="label">Folders tracked</p>
-                  <p class="value" id="totalFolders">—</p>
-                </div>
-                <div class="dashboard-tile">
-                  <p class="label">DYC-target folders</p>
-                  <p class="value" id="totalDycTargets">—</p>
-                </div>
-              </div>
-              <div id="dashboardAccountList">
-                <p class="empty-state">Loading dashboard…</p>
-              </div>
+              </section>
             </section>
 
-            <section class="section-grid">
+            <section
+              class="tab-panel"
+              id="tabPanelAlerts"
+              data-tab-panel="alerts"
+              hidden
+            >
               <section class="panel section-panel">
-                <h2 class="section-title">Mailbox</h2>
-                <div class="folder-board">
-                  <div class="readiness-list">
-                    <div class="readiness-item">
-                      <span class="readiness-label">API reachability</span>
-                      <span class="readiness-value" id="apiReachability">Checking</span>
-                    </div>
-                    <div class="readiness-item">
-                      <span class="readiness-label">OAuth configuration</span>
-                      <span class="readiness-value" id="oauthReadiness">Checking</span>
-                    </div>
-                    <div class="readiness-item">
-                      <span class="readiness-label">Database connection</span>
-                      <span class="readiness-value" id="dbReadiness">Checking</span>
-                    </div>
-                  </div>
-                  <div class="folder-groups">
-                    <div class="folder-group">
-                      <h3>DYC folders</h3>
-                      <div class="folder-list" id="dycFolderList">
-                        <p class="empty-state">No DYC-managed folders loaded yet.</p>
-                      </div>
-                    </div>
-                    <div class="folder-group">
-                      <h3>Legacy / other folders</h3>
-                      <div class="folder-list" id="otherFolderList">
-                        <p class="empty-state">No folder inventory loaded yet.</p>
-                      </div>
-                    </div>
-                  </div>
+                <h2 class="section-title">Alerts &amp; notices</h2>
+                <p class="empty-state" id="alertsIntro">
+                  Items requiring attention, derived from real runtime and
+                  account state. No fabricated data.
+                </p>
+                <div class="alerts-list" id="alertsList">
+                  <p class="empty-state">Loading alerts…</p>
                 </div>
               </section>
+            </section>
 
-              <section class="panel section-panel">
-                <h2 class="section-title">Actions</h2>
-                <div class="endpoint-actions">
-                  <button class="endpoint-button" id="sessionButton" type="button" disabled>
-                    <strong>Session</strong>
-                    <span>Fetch `/auth/session`</span>
-                  </button>
-                  <button class="endpoint-button" id="foldersButton" type="button" disabled>
-                    <strong>Folders</strong>
-                    <span>Fetch `/mail/folders`</span>
-                  </button>
-                  <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
-                    <strong>Inventory Sync</strong>
-                    <span>POST `/mail/folders/inventory/sync`</span>
-                  </button>
-                  <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
-                    <strong>Bootstrap</strong>
-                    <span>POST `/mail/folders/bootstrap`</span>
-                  </button>
-                </div>
-                <div class="diagnostic-list" id="missingConfigList">
-                  <div class="diagnostic-row">
-                    <span class="diagnostic-name">Loading</span>
-                    <span class="diagnostic-state missing">Checking</span>
-                  </div>
-                </div>
-                <h2 class="section-title">Last response</h2>
-                <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
-              </section>
+            <section
+              class="tab-panel"
+              id="tabPanelDiagnostics"
+              data-tab-panel="diagnostics"
+              hidden
+            >
+              <div class="shell">
+                <section class="layout">
+                  <section class="panel connect-panel">
+                    <div class="eyebrow">Microsoft 365</div>
+                    <h1>API &amp; diagnostics</h1>
+                    <div class="action-row">
+                      <button class="secondary" id="refreshButton" type="button">Refresh</button>
+                    </div>
+                    <div class="info-grid">
+                      <div class="info-item">
+                        <p class="label">Linked account</p>
+                        <p class="value" id="linkedEmail">—</p>
+                      </div>
+                      <div class="info-item">
+                        <p class="label">Mailbox access</p>
+                        <p class="value" id="mailboxAccess">—</p>
+                      </div>
+                      <div class="info-item">
+                        <p class="label">API base</p>
+                        <p class="value"><code id="apiBaseText"></code></p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <aside class="panel status-panel">
+                    <span class="status-chip idle" id="statusChip">Checking connection state</span>
+                    <h2 class="status-title">Current session</h2>
+                    <p class="status-copy">
+                      Browser session state and backend readiness.
+                    </p>
+                    <div class="meta-grid">
+                      <div class="meta-card">
+                        <p class="label">Display name</p>
+                        <p class="value" id="linkedName">—</p>
+                      </div>
+                      <div class="meta-card">
+                        <p class="label">Session state</p>
+                        <p class="value" id="sessionState">Checking</p>
+                      </div>
+                    </div>
+                  </aside>
+                </section>
+
+                <section class="section-grid">
+                  <section class="panel section-panel">
+                    <h2 class="section-title">Mailbox</h2>
+                    <div class="folder-board">
+                      <div class="readiness-list">
+                        <div class="readiness-item">
+                          <span class="readiness-label">API reachability</span>
+                          <span class="readiness-value" id="apiReachability">Checking</span>
+                        </div>
+                        <div class="readiness-item">
+                          <span class="readiness-label">OAuth configuration</span>
+                          <span class="readiness-value" id="oauthReadiness">Checking</span>
+                        </div>
+                        <div class="readiness-item">
+                          <span class="readiness-label">Database connection</span>
+                          <span class="readiness-value" id="dbReadiness">Checking</span>
+                        </div>
+                      </div>
+                      <div class="folder-groups">
+                        <div class="folder-group">
+                          <h3>DYC folders</h3>
+                          <div class="folder-list" id="dycFolderList">
+                            <p class="empty-state">No DYC-managed folders loaded yet.</p>
+                          </div>
+                        </div>
+                        <div class="folder-group">
+                          <h3>Legacy / other folders</h3>
+                          <div class="folder-list" id="otherFolderList">
+                            <p class="empty-state">No folder inventory loaded yet.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section class="panel section-panel">
+                    <h2 class="section-title">Actions</h2>
+                    <div class="endpoint-actions">
+                      <button class="endpoint-button" id="sessionButton" type="button" disabled>
+                        <strong>Session</strong>
+                        <span>Fetch `/auth/session`</span>
+                      </button>
+                      <button class="endpoint-button" id="foldersButton" type="button" disabled>
+                        <strong>Folders</strong>
+                        <span>Fetch `/mail/folders`</span>
+                      </button>
+                      <button class="endpoint-button" id="inventorySyncButton" type="button" disabled>
+                        <strong>Inventory Sync</strong>
+                        <span>POST `/mail/folders/inventory/sync`</span>
+                      </button>
+                      <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
+                        <strong>Bootstrap</strong>
+                        <span>POST `/mail/folders/bootstrap`</span>
+                      </button>
+                    </div>
+                    <div class="diagnostic-list" id="missingConfigList">
+                      <div class="diagnostic-row">
+                        <span class="diagnostic-name">Loading</span>
+                        <span class="diagnostic-state missing">Checking</span>
+                      </div>
+                    </div>
+                    <h2 class="section-title">Last response</h2>
+                    <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
+                  </section>
+                </section>
+              </div>
             </section>
           </div>
         </div>
@@ -949,6 +1244,12 @@
 
       const API_BASE = inferApiBase();
       const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+      const DHW_EMAIL = "daniel.young@digitalhealthworks.com";
+
+      function signInUrl(loginHint) {
+        if (!loginHint) return SIGN_IN_URL;
+        return `${SIGN_IN_URL}?login_hint=${encodeURIComponent(loginHint)}`;
+      }
 
       const gateView = document.getElementById("gateView");
       const gateChip = document.getElementById("gateChip");
@@ -988,9 +1289,35 @@
       const totalDycTargets = document.getElementById("totalDycTargets");
       const dashboardAccountList = document.getElementById("dashboardAccountList");
 
+      const addDhwAccountLink = document.getElementById("addDhwAccountLink");
+      const addAnyAccountLink = document.getElementById("addAnyAccountLink");
+      const activityList = document.getElementById("activityList");
+      const activityIntro = document.getElementById("activityIntro");
+      const activityPendingBanner = document.getElementById("activityPendingBanner");
+      const activityCount = document.getElementById("activityCount");
+      const alertsList = document.getElementById("alertsList");
+      const alertsCount = document.getElementById("alertsCount");
+      const tabButtons = document.querySelectorAll(".tab-button");
+      const tabPanels = document.querySelectorAll("[data-tab-panel]");
+
       apiBaseText.textContent = API_BASE;
       gateConnectLink.href = SIGN_IN_URL;
       headerSignInLink.href = SIGN_IN_URL;
+      addDhwAccountLink.href = signInUrl(DHW_EMAIL);
+      addAnyAccountLink.href = SIGN_IN_URL;
+
+      function activateTab(name) {
+        tabButtons.forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === name);
+        });
+        tabPanels.forEach((panel) => {
+          panel.hidden = panel.dataset.tabPanel !== name;
+        });
+      }
+
+      tabButtons.forEach((btn) => {
+        btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+      });
 
       function setHeaderUnauthenticated() {
         headerAccount.hidden = true;
@@ -1028,6 +1355,8 @@
         disableMailboxActions();
         clearMailboxView();
         clearDashboard();
+        clearActivity("Sign in to view activity.");
+        clearAlerts("Sign in to view alerts.");
       }
 
       function showApp(account) {
@@ -1278,6 +1607,136 @@
         return payload;
       }
 
+      function clearActivity(reason) {
+        activityList.innerHTML = `<p class="empty-state">${escapeHtml(reason || "No activity yet.")}</p>`;
+        activityCount.hidden = true;
+        activityCount.textContent = "0";
+        activityPendingBanner.hidden = true;
+      }
+
+      function renderActivity(payload) {
+        if (!payload) {
+          clearActivity("Activity log unavailable.");
+          return;
+        }
+        const events = payload.events || [];
+        const instrumentation = payload.instrumentation || {};
+
+        if (instrumentation.available === false) {
+          activityPendingBanner.hidden = false;
+          activityPendingBanner.textContent =
+            instrumentation.reason ||
+            "Activity instrumentation is not available yet.";
+        } else if (instrumentation.message_movement_available === false) {
+          activityPendingBanner.hidden = false;
+          activityPendingBanner.textContent =
+            instrumentation.reason ||
+            "Message-level movement is not yet instrumented; only account and folder events are recorded.";
+        } else {
+          activityPendingBanner.hidden = true;
+          activityPendingBanner.textContent = "";
+        }
+
+        if (!events.length) {
+          activityList.innerHTML = `<p class="empty-state">No audit events recorded yet. Run a folder sync or bootstrap to seed the log.</p>`;
+          activityCount.hidden = true;
+          activityCount.textContent = "0";
+          return;
+        }
+
+        activityCount.hidden = false;
+        activityCount.textContent = String(events.length);
+
+        activityList.innerHTML = events.map((event) => {
+          const meta = event.metadata && Object.keys(event.metadata).length
+            ? `<p class="activity-event-meta">${escapeHtml(JSON.stringify(event.metadata))}</p>`
+            : "";
+          const account = event.account_email
+            ? `<span class="activity-event-time">${escapeHtml(event.account_email)}</span>`
+            : "";
+          return `
+            <div class="activity-event">
+              <div class="activity-event-head">
+                <span class="activity-event-type">${escapeHtml(event.event_type)} <span class="metric-tag live">${escapeHtml(event.actor || "system")}</span></span>
+                <span class="activity-event-time">${escapeHtml(formatTimestamp(event.created_at))}</span>
+              </div>
+              ${account}
+              ${meta}
+            </div>
+          `;
+        }).join("");
+      }
+
+      async function loadActivity() {
+        const response = await fetch(`${API_BASE}/dashboard/activity`, {
+          credentials: "include"
+        });
+        if (!response.ok) {
+          clearActivity(`Activity log request failed (${response.status}).`);
+          return null;
+        }
+        const payload = await response.json();
+        renderActivity(payload);
+        return payload;
+      }
+
+      function clearAlerts(reason) {
+        alertsList.innerHTML = `<p class="empty-state">${escapeHtml(reason || "No alerts yet.")}</p>`;
+        alertsCount.hidden = true;
+        alertsCount.textContent = "0";
+      }
+
+      function renderAlerts(payload) {
+        if (!payload) {
+          clearAlerts("Alerts unavailable.");
+          return;
+        }
+        const alerts = payload.alerts || [];
+        const counts = payload.counts || {};
+        const attentionCount = (counts.error || 0) + (counts.warning || 0);
+        if (attentionCount > 0) {
+          alertsCount.hidden = false;
+          alertsCount.textContent = String(attentionCount);
+        } else {
+          alertsCount.hidden = true;
+        }
+
+        if (!alerts.length) {
+          alertsList.innerHTML = `<p class="empty-state">No alerts. Everything reachable looks healthy.</p>`;
+          return;
+        }
+
+        alertsList.innerHTML = alerts.map((alert) => {
+          const severity = alert.severity || "info";
+          const scope = alert.account_email
+            ? `${alert.scope || "account"} · ${escapeHtml(alert.account_email)}`
+            : (alert.scope || "platform");
+          return `
+            <div class="alert-item severity-${escapeHtml(severity)}">
+              <div class="alert-head">
+                <span class="alert-severity ${escapeHtml(severity)}">${escapeHtml(severity)}</span>
+                <span class="alert-scope">${scope}</span>
+              </div>
+              <p class="alert-message">${escapeHtml(alert.message || "")}</p>
+              ${alert.next_action ? `<p class="alert-action">Next: ${escapeHtml(alert.next_action)}</p>` : ""}
+            </div>
+          `;
+        }).join("");
+      }
+
+      async function loadAlerts() {
+        const response = await fetch(`${API_BASE}/dashboard/alerts`, {
+          credentials: "include"
+        });
+        if (!response.ok) {
+          clearAlerts(`Alerts request failed (${response.status}).`);
+          return null;
+        }
+        const payload = await response.json();
+        renderAlerts(payload);
+        return payload;
+      }
+
       async function loadMailboxView() {
         const payload = await callApi("Inventory sync", "/mail/folders/inventory/sync", {
           method: "POST"
@@ -1365,6 +1824,18 @@
           // Dashboard is supplementary; failure should not gate the rest of the UI.
           dashboardAccountList.innerHTML =
             `<p class="empty-state">Dashboard request failed: ${escapeHtml(error.message)}.</p>`;
+        }
+
+        try {
+          await loadActivity();
+        } catch (error) {
+          clearActivity(`Activity log request failed: ${error.message}`);
+        }
+
+        try {
+          await loadAlerts();
+        } catch (error) {
+          clearAlerts(`Alerts request failed: ${error.message}`);
         }
       }
 

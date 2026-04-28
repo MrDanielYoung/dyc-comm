@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -665,6 +666,9 @@ def test_protected_mailbox_endpoints_reject_unauthenticated_calls(monkeypatch):
         ("GET", "/accounts"),
         ("GET", "/dashboard/summary"),
         ("GET", "/accounts/daniel@danielyoung.io/dashboard"),
+        ("GET", "/dashboard/activity"),
+        ("GET", "/dashboard/alerts"),
+        ("GET", "/accounts/daniel@danielyoung.io/activity"),
     )
     for method, path in protected:
         response = test_client.request(method, path)
@@ -937,3 +941,361 @@ def test_cli_build_parser_dispatches_subcommands():
 
     auth_args = parser.parse_args(["auth-url"])
     assert auth_args.func is cli.cmd_auth_url
+
+
+def test_microsoft_start_accepts_login_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?login_hint=daniel.young@digitalhealthworks.com",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    parsed = urlparse(location)
+    query = parse_qs(parsed.query)
+    assert query["login_hint"] == ["daniel.young@digitalhealthworks.com"]
+
+
+def test_microsoft_start_accepts_target_email_alias(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?target_email=daniel.young@digitalhealthworks.com",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["login_hint"] == ["daniel.young@digitalhealthworks.com"]
+
+
+def test_microsoft_start_drops_malformed_login_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", "tenant-id")
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?login_hint=not-an-email",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert "login_hint" not in query
+
+
+def test_dashboard_activity_session_only(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accounts"] == []
+    assert payload["events"] == []
+    assert payload["instrumentation"]["available"] is False
+    assert payload["instrumentation"]["message_movement_available"] is False
+
+
+def test_dashboard_activity_returns_events(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_load_account_activity",
+        lambda account_id, limit=50: [
+            {
+                "id": "evt-1",
+                "actor": "system",
+                "event_type": "folder.inventory_sync",
+                "metadata": {"folder_count": 22},
+                "created_at": "2026-04-28T01:00:00+00:00",
+            },
+            {
+                "id": "evt-2",
+                "actor": "user",
+                "event_type": "account.linked",
+                "metadata": {"email": "daniel@danielyoung.io"},
+                "created_at": "2026-04-27T22:00:00+00:00",
+            },
+        ],
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["events"]) == 2
+    assert payload["events"][0]["event_type"] == "folder.inventory_sync"
+    assert payload["events"][0]["account_email"] == "daniel@danielyoung.io"
+    assert payload["accounts"][0]["event_count"] == 2
+    instrumentation = payload["instrumentation"]
+    assert instrumentation["available"] is True
+    assert instrumentation["message_movement_available"] is False
+    assert "movement" in instrumentation["reason"].lower()
+
+
+def test_account_activity_returns_404_for_unknown_email(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts/missing@example.com/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 404
+
+
+def test_account_activity_returns_events_for_match(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_load_account_activity",
+        lambda account_id, limit=50: [
+            {
+                "id": "evt-1",
+                "actor": "system",
+                "event_type": "folder.bootstrap",
+                "metadata": {"ensured_folder_count": 9},
+                "created_at": "2026-04-28T01:00:00+00:00",
+            }
+        ],
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/accounts/daniel@danielyoung.io/activity",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["account"]["email"] == "daniel@danielyoung.io"
+    assert payload["events"][0]["event_type"] == "folder.bootstrap"
+
+
+def test_dashboard_alerts_session_without_db(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    for var in (
+        "DATABASE_URL",
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [])
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ids = {alert["id"] for alert in payload["alerts"]}
+    assert "runtime_var_missing:DATABASE_URL" in ids
+    assert "runtime_var_missing:MICROSOFT_ENTRA_CLIENT_ID" in ids
+    assert "no_persisted_account" in ids
+    assert "pending_instrumentation:email_volume" in ids
+    assert payload["counts"]["error"] >= 1
+    assert payload["counts"]["info"] >= 2
+
+
+def test_dashboard_alerts_account_missing_refresh_token(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    for var in (
+        "DATABASE_URL",
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+    ):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": False,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_summarize_folder_inventory",
+        lambda account_id: {
+            "available": True,
+            "total_folders": 0,
+            "dyc_target_folders": 0,
+            "by_ownership": {},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": False,
+        },
+    )
+    monkeypatch.setattr(main, "_last_activity_at", lambda account_id: None)
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ids = {alert["id"] for alert in payload["alerts"]}
+    assert "account_no_refresh:daniel@danielyoung.io" in ids
+    assert "folders_empty:daniel@danielyoung.io" in ids
+    assert "no_activity:daniel@danielyoung.io" in ids
+    # Errors come first.
+    severities = [alert["severity"] for alert in payload["alerts"]]
+    assert severities == sorted(
+        severities,
+        key=lambda s: {"error": 0, "warning": 1, "info": 2}.get(s, 9),
+    )
+
+
+def test_dashboard_alerts_clean_when_everything_ready(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    for var in (
+        "DATABASE_URL",
+        "MICROSOFT_ENTRA_CLIENT_ID",
+        "MICROSOFT_ENTRA_TENANT_ID",
+        "MICROSOFT_ENTRA_CLIENT_SECRET",
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "KEY_VAULT_REFS_ENABLED",
+    ):
+        monkeypatch.setenv(var, "x")
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "account-123",
+                "provider": main.MICROSOFT_PROVIDER,
+                "email": email,
+                "display_name": "Daniel Young",
+                "status": "active",
+                "has_refresh_token": True,
+                "token_updated_at": None,
+                "updated_at": None,
+                "created_at": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        main,
+        "_summarize_folder_inventory",
+        lambda account_id: {
+            "available": True,
+            "total_folders": 22,
+            "dyc_target_folders": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "by_ownership": {"dyc_managed": 9},
+            "expected_dyc_target_count": len(main.DEFAULT_MVP_FOLDER_SPECS),
+            "is_bootstrapped": True,
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "_last_activity_at",
+        lambda account_id: datetime.now(UTC),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/dashboard/alerts",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ids = {alert["id"] for alert in payload["alerts"]}
+    # No runtime, account, or session alerts.
+    suppressed_prefixes = (
+        "runtime_var_missing",
+        "account_no_refresh",
+        "folders_",
+        "no_activity",
+        "stale_activity",
+        "no_persisted_account",
+    )
+    for prefix in suppressed_prefixes:
+        assert not any(aid.startswith(prefix) for aid in ids), prefix
+    # Pending-instrumentation info alerts always present.
+    assert "pending_instrumentation:email_volume" in ids
+    assert "pending_instrumentation:action_activity" in ids
+    assert payload["counts"]["error"] == 0
+    assert payload["counts"]["warning"] == 0
