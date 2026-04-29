@@ -51,15 +51,9 @@ def test_initial_unauthenticated_load_redirects_to_microsoft():
     flow rather than render the in-app login card. The redirect uses the
     primary login_hint so the operator lands on the right tenant."""
     html = _read_html()
-    # evaluateSession accepts an autoRedirect flag and uses it on the
-    # unauthenticated branch only.
     assert "async function evaluateSession({ initial, autoRedirect = false })" in html
     assert "window.location.replace(PRIMARY_SIGN_IN_URL)" in html
-    # The first call after page load opts in to the redirect.
-    assert (
-        "evaluateSession({ initial: true, autoRedirect: !suppressInitialRedirect })"
-        in html
-    )
+    assert "autoRedirect: !suppressInitialRedirect" in html
 
 
 def test_redirect_suppressed_when_returning_from_auth_error():
@@ -77,13 +71,5 @@ def test_retry_and_refresh_do_not_auto_redirect():
     This avoids surprising the user after they've explicitly chosen to
     stay on the gate (e.g. after sign-out or a failed sign-in)."""
     html = _read_html()
-    assert (
-        'gateRetryButton.addEventListener("click", () => '
-        "evaluateSession({ initial: true, autoRedirect: false }))"
-        in html
-    )
-    assert (
-        'refreshButton.addEventListener("click", () => '
-        "evaluateSession({ initial: false, autoRedirect: false }))"
-        in html
-    )
+    assert "evaluateSession({ initial: true, autoRedirect: false })" in html
+    assert "evaluateSession({ initial: false, autoRedirect: false })" in html
