@@ -2987,7 +2987,62 @@
         return payload;
       }
 
-      async function evaluateSession({ initial, autoRedirect = false }) {
+      // Pure decision function: given the session check inputs, returns
+      // what the UI should do next. Extracted so the redirect logic can
+      // be exercised by unit tests without spinning up a real DOM.
+      // Inputs:
+      //   initial         - true only on first page load (not retry/refresh)
+      //   suppressRedirect- true when the user must stay on the gate
+      //                     (auth-error callback, sign-out, retry, refresh,
+      //                     API unreachable, or 401 from a later API call)
+      //   payload         - /auth/session response, or null on fetch error
+      //   fetchError      - Error object from fetchSession, or null
+      //   primarySignInUrl- URL to redirect unauthenticated users to
+      //   reauthSignInUrl - function(email) -> URL for re-auth redirect
+      function decideSessionAction({
+        initial,
+        suppressRedirect,
+        payload,
+        fetchError,
+        primarySignInUrl,
+        reauthSignInUrl,
+      }) {
+        if (fetchError) {
+          return {
+            kind: "gate",
+            chip: "API unreachable",
+            title: "Sign in",
+            notice: `API request failed: ${fetchError.message}`,
+          };
+        }
+        const account = payload && payload.linked_account;
+        if (!account) {
+          if (initial && !suppressRedirect) {
+            return { kind: "redirect", url: primarySignInUrl };
+          }
+          return { kind: "gate", chip: "Sign-in required", title: "Sign in" };
+        }
+        if (!payload.mailbox_access_ready) {
+          if (initial && !suppressRedirect) {
+            return { kind: "redirect", url: reauthSignInUrl(account.email) };
+          }
+          return {
+            kind: "gate",
+            chip: "Re-authentication required",
+            title: "Sign in",
+            notice: `Linked account: ${account.email} — mailbox access expired, sign in again to continue.`,
+          };
+        }
+        return { kind: "app", account, payload };
+      }
+
+      // Single source of truth for "the user has explicitly chosen to stay
+      // on the gate, do not auto-redirect them again." Set by ?auth=error,
+      // sign-out, retry/refresh buttons, and 401 fallbacks. Cleared only by
+      // a fresh page load.
+      let suppressInitialRedirect = false;
+
+      async function evaluateSession({ initial }) {
         if (initial) {
           showGate({
             chip: "Checking session…",
@@ -2995,39 +3050,41 @@
           });
         }
 
-        let payload;
+        let payload = null;
+        let fetchError = null;
         try {
           payload = await fetchSession();
         } catch (error) {
+          fetchError = error;
+        }
+
+        const decision = decideSessionAction({
+          initial,
+          suppressRedirect: suppressInitialRedirect,
+          payload,
+          fetchError,
+          primarySignInUrl: PRIMARY_SIGN_IN_URL,
+          reauthSignInUrl: signInUrlForEmail,
+        });
+
+        if (decision.kind === "redirect") {
+          window.location.replace(decision.url);
+          return;
+        }
+        if (decision.kind === "gate") {
+          // Once we've shown the gate (e.g. API unreachable), the user must
+          // explicitly retry — don't silently auto-redirect on the next call.
+          suppressInitialRedirect = true;
           showGate({
-            chip: "API unreachable",
-            title: "Sign in",
-            notice: `API request failed: ${error.message}`
+            chip: decision.chip,
+            title: decision.title,
+            notice: decision.notice,
           });
           return;
         }
 
-        const account = payload.linked_account;
-        if (!account) {
-          if (autoRedirect) {
-            window.location.replace(PRIMARY_SIGN_IN_URL);
-            return;
-          }
-          showGate({
-            chip: "Sign-in required",
-            title: "Sign in"
-          });
-          return;
-        }
-
-        if (!payload.mailbox_access_ready) {
-          showGate({
-            chip: "Re-authentication required",
-            title: "Sign in",
-            notice: `Linked account: ${account.email} — mailbox access expired, sign in again to continue.`
-          });
-          return;
-        }
+        // decision.kind === "app"
+        const account = decision.account;
 
         showApp(account);
         setStatus(true, account.email, account.display_name, true);
@@ -3073,6 +3130,9 @@
       }
 
       async function signOut() {
+        // After sign-out we land back on the gate; the user explicitly chose
+        // to leave, so don't bounce them straight back to Microsoft.
+        suppressInitialRedirect = true;
         try {
           await fetch(`${API_BASE}/auth/logout`, {
             method: "POST",
@@ -3092,6 +3152,9 @@
           return await callApi(label, path, options);
         } catch (error) {
           if (error.status === 401) {
+            // 401 from a later API call means our session expired mid-use;
+            // re-evaluate but keep the user on the gate so they can react.
+            suppressInitialRedirect = true;
             await evaluateSession({ initial: false });
           }
           return null;
@@ -3099,7 +3162,6 @@
       }
 
       const url = new URL(window.location.href);
-      let suppressInitialRedirect = false;
       if (url.searchParams.get("auth") === "success") {
         url.search = "";
         window.history.replaceState({}, "", url);
@@ -3115,8 +3177,16 @@
         suppressInitialRedirect = true;
       }
 
-      gateRetryButton.addEventListener("click", () => evaluateSession({ initial: true, autoRedirect: false }));
-      refreshButton.addEventListener("click", () => evaluateSession({ initial: false, autoRedirect: false }));
+      // Manual re-evaluation from the gate or app: the user is here on
+      // purpose, so suppress auto-redirect for the rest of the session.
+      gateRetryButton.addEventListener("click", () => {
+        suppressInitialRedirect = true;
+        evaluateSession({ initial: true });
+      });
+      refreshButton.addEventListener("click", () => {
+        suppressInitialRedirect = true;
+        evaluateSession({ initial: false });
+      });
       headerSignOutButton.addEventListener("click", signOut);
       if (activityRefresh) {
         activityRefresh.addEventListener("click", () => loadActivity());
@@ -3151,7 +3221,7 @@
         if (payload) renderFolders(payload.ensured_folders || []);
       });
 
-      evaluateSession({ initial: true, autoRedirect: !suppressInitialRedirect });
+      evaluateSession({ initial: true });
     </script>
   </body>
 </html>
