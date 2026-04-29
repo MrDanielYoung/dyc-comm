@@ -1189,6 +1189,114 @@ def test_accounts_returns_persisted_rows(monkeypatch):
     assert payload["accounts"][0]["mailbox_access_ready"] is True
 
 
+def test_visible_account_emails_for_allowed_session(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS",
+        "daniel@danielyoung.io,daniel.young@digitalhealthworks.com,daniel.young@boldworks.de",
+    )
+
+    visible = main._visible_account_emails_for_session("daniel.young@digitalhealthworks.com")
+
+    assert visible == [
+        "daniel.young@boldworks.de",
+        "daniel.young@digitalhealthworks.com",
+        "daniel@danielyoung.io",
+    ]
+
+
+def test_visible_account_emails_empty_for_unlisted_session(monkeypatch):
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS",
+        "daniel@danielyoung.io,daniel.young@digitalhealthworks.com",
+    )
+
+    assert main._visible_account_emails_for_session("stranger@example.com") == []
+
+
+def test_list_user_accounts_includes_allowed_mailbox_set(monkeypatch):
+    """Signing in as DHW should still list the DYC mailbox in this private
+    single-user app. The SQL query receives the allow-listed account set so
+    connected_account rows are not hidden under the current session email.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv(
+        "ALLOWED_ACCOUNT_EMAILS",
+        "daniel@danielyoung.io,daniel.young@digitalhealthworks.com,daniel.young@boldworks.de",
+    )
+    monkeypatch.setattr(main, "_ensure_account_tables", lambda: None)
+
+    captured = {}
+
+    class FakePsycopg:
+        Error = Exception
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, query, params):
+            captured["query"] = query
+            captured["params"] = params
+
+        def fetchall(self):
+            return [
+                (
+                    "account-dyc",
+                    main.MICROSOFT_PROVIDER,
+                    "daniel@danielyoung.io",
+                    "Daniel Young",
+                    "active",
+                    True,
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    "account-dhw",
+                    main.MICROSOFT_PROVIDER,
+                    "daniel.young@digitalhealthworks.com",
+                    "Daniel Young",
+                    "active",
+                    True,
+                    None,
+                    None,
+                    None,
+                ),
+            ]
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(main, "_psycopg", lambda: FakePsycopg)
+    monkeypatch.setattr(main, "_get_connection", lambda: FakeConnection())
+
+    accounts = main._list_user_accounts("daniel.young@digitalhealthworks.com")
+
+    assert "lower(ca.email_address) = ANY(%s)" in captured["query"]
+    assert captured["params"] == (
+        "daniel.young@digitalhealthworks.com",
+        [
+            "daniel.young@boldworks.de",
+            "daniel.young@digitalhealthworks.com",
+            "daniel@danielyoung.io",
+        ],
+    )
+    assert [account["email"] for account in accounts] == [
+        "daniel@danielyoung.io",
+        "daniel.young@digitalhealthworks.com",
+    ]
+
+
 def test_dashboard_summary_requires_session(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     test_client = TestClient(main.app)
