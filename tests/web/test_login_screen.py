@@ -43,3 +43,47 @@ def test_primary_login_uses_danielyoung_io_login_hint():
     assert "headerSignInLink.href = PRIMARY_SIGN_IN_URL" in html
     # The "different account" link must still use the un-hinted URL.
     assert "connectGenericLink.href = SIGN_IN_URL" in html
+
+
+def test_initial_unauthenticated_load_redirects_to_microsoft():
+    """Match the kate.digitalhealthworks.com behavior: an unauthenticated
+    initial visit must redirect straight to the Microsoft-hosted sign-in
+    flow rather than render the in-app login card. The redirect uses the
+    primary login_hint so the operator lands on the right tenant."""
+    html = _read_html()
+    # evaluateSession accepts an autoRedirect flag and uses it on the
+    # unauthenticated branch only.
+    assert "async function evaluateSession({ initial, autoRedirect = false })" in html
+    assert "window.location.replace(PRIMARY_SIGN_IN_URL)" in html
+    # The first call after page load opts in to the redirect.
+    assert (
+        "evaluateSession({ initial: true, autoRedirect: !suppressInitialRedirect })"
+        in html
+    )
+
+
+def test_redirect_suppressed_when_returning_from_auth_error():
+    """If the callback bounced us back with ?auth=error, we must not
+    redirect again — that would loop the user through Microsoft on every
+    failed attempt. Instead we keep the gate visible with the error
+    notice so the operator can read it and retry manually."""
+    html = _read_html()
+    assert "suppressInitialRedirect = true" in html
+
+
+def test_retry_and_refresh_do_not_auto_redirect():
+    """User-driven re-evaluations (gate retry button, app refresh) must
+    not trigger an automatic redirect — only the initial page load does.
+    This avoids surprising the user after they've explicitly chosen to
+    stay on the gate (e.g. after sign-out or a failed sign-in)."""
+    html = _read_html()
+    assert (
+        'gateRetryButton.addEventListener("click", () => '
+        "evaluateSession({ initial: true, autoRedirect: false }))"
+        in html
+    )
+    assert (
+        'refreshButton.addEventListener("click", () => '
+        "evaluateSession({ initial: false, autoRedirect: false }))"
+        in html
+    )
