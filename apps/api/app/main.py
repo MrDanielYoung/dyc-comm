@@ -74,6 +74,7 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     ("AZURE_AI_ENDPOINT", False),
     ("AZURE_AI_DEPLOYMENT", False),
     ("AZURE_AI_API_KEY", True),
+    ("AUTOMATION_RUN_TOKEN", True),
 )
 
 # Env vars that are optional / advisory. Their absence must NOT cause
@@ -91,6 +92,7 @@ _OPTIONAL_RUNTIME_VARIABLES: frozenset[str] = frozenset(
         "AZURE_AI_ENDPOINT",
         "AZURE_AI_DEPLOYMENT",
         "AZURE_AI_API_KEY",
+        "AUTOMATION_RUN_TOKEN",
     }
 )
 
@@ -1609,6 +1611,61 @@ def _list_user_accounts(user_email: str) -> list[dict[str, Any]]:
     ]
 
 
+def _list_automation_accounts() -> list[dict[str, Any]]:
+    """Return connected accounts eligible for the machine scheduler to inspect."""
+    allowed_emails = _allowed_account_emails()
+    if not _database_url() or not allowed_emails:
+        return []
+
+    psycopg = _psycopg()
+    _ensure_account_tables()
+
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        ca.id,
+                        ca.provider,
+                        ca.email_address,
+                        COALESCE(ca.display_name, au.display_name, ca.email_address),
+                        ca.status,
+                        ca.refresh_token IS NOT NULL,
+                        ca.token_updated_at,
+                        ca.updated_at,
+                        ca.created_at
+                    FROM connected_account ca
+                    JOIN app_user au ON au.id = ca.user_id
+                    WHERE lower(ca.email_address) = ANY(%s)
+                      AND ca.status = 'active'
+                    ORDER BY ca.updated_at DESC
+                    """,
+                    (sorted(allowed_emails),),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load automation accounts from PostgreSQL.",
+        ) from exc
+
+    return [
+        {
+            "account_id": row[0],
+            "provider": row[1],
+            "email": row[2],
+            "display_name": row[3],
+            "status": row[4],
+            "has_refresh_token": row[5],
+            "token_updated_at": row[6].isoformat() if row[6] else None,
+            "updated_at": row[7].isoformat() if row[7] else None,
+            "created_at": row[8].isoformat() if row[8] else None,
+        }
+        for row in rows
+    ]
+
+
 def _summarize_folder_inventory(account_id: str) -> dict[str, Any]:
     folders = _load_folder_inventory(account_id)
     total = len(folders)
@@ -1681,7 +1738,7 @@ def _automation_health_for_account(account_row: dict[str, Any]) -> dict[str, Any
         return {
             "state": "yellow",
             "label": "Folders incomplete",
-            "automation_ready": False,
+            "automation_ready": True,
             "reasons": ["One or more DYC-managed target folders are missing; run Bootstrap."],
         }
     return {
@@ -3222,7 +3279,20 @@ async def automove_inbox_messages(
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
     target = _scope_account_to_session(rows, account)
+    return await _automove_for_account(
+        requested_by_email=user_email,
+        target=target,
+        limit=limit,
+        min_confidence=min_confidence,
+    )
 
+
+async def _automove_for_account(
+    requested_by_email: str,
+    target: dict[str, Any],
+    limit: int,
+    min_confidence: float,
+) -> dict[str, Any]:
     health = _automation_health_for_account(target)
     if not health["automation_ready"]:
         raise HTTPException(
@@ -3278,7 +3348,7 @@ async def automove_inbox_messages(
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
-                requested_by_email=user_email,
+                requested_by_email=requested_by_email,
                 provider_message_id=provider_message_id,
                 source_folder_id=message.get("parentFolderId"),
                 destination_folder_id=None,
@@ -3322,7 +3392,7 @@ async def automove_inbox_messages(
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
-                requested_by_email=user_email,
+                requested_by_email=requested_by_email,
                 provider_message_id=provider_message_id,
                 source_folder_id=message.get("parentFolderId"),
                 destination_folder_id=None,
@@ -3353,7 +3423,7 @@ async def automove_inbox_messages(
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
-                requested_by_email=user_email,
+                requested_by_email=requested_by_email,
                 provider_message_id=provider_message_id,
                 source_folder_id=message.get("parentFolderId"),
                 destination_folder_id=destination_folder_id,
@@ -3379,7 +3449,7 @@ async def automove_inbox_messages(
         _persist_move_action(
             account_id=account_id,
             account_email=account_email,
-            requested_by_email=user_email,
+            requested_by_email=requested_by_email,
             provider_message_id=provider_message_id,
             source_folder_id=message.get("parentFolderId"),
             destination_folder_id=destination_folder_id,
@@ -3420,6 +3490,94 @@ async def automove_inbox_messages(
         "failed": sum(1 for r in results if r["status"] == "failed"),
         "review_folder": classifier_module.REVIEW_FOLDER,
         "results": results,
+    }
+
+
+def _require_automation_run_token(request: Request) -> None:
+    expected = os.getenv("AUTOMATION_RUN_TOKEN")
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="AUTOMATION_RUN_TOKEN is not configured.",
+        )
+    authorization = request.headers.get("authorization") or ""
+    bearer = authorization.removeprefix("Bearer ").strip()
+    header_token = request.headers.get("x-automation-token") or ""
+    provided = bearer or header_token.strip()
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid automation token.")
+
+
+@app.post("/automation/run")
+async def run_scheduled_automation(
+    request: Request,
+    limit: int = Query(default=10, ge=1, le=INBOX_AUTOMATION_MAX_BATCH),
+    min_confidence: float = Query(
+        default=INBOX_AUTOMATION_DEFAULT_CONFIDENCE,
+        ge=0.90,
+        le=1.0,
+    ),
+) -> dict[str, Any]:
+    """Machine endpoint called by the scheduled workflow.
+
+    Runs the same guarded inbox automation path as the UI button, across all
+    connected allow-listed accounts. The endpoint is token-protected and does
+    not depend on a browser session cookie.
+    """
+    _require_automation_run_token(request)
+    accounts = _list_automation_accounts()
+
+    account_results: list[dict[str, Any]] = []
+    for account_row in accounts:
+        health = _automation_health_for_account(account_row)
+        if health["state"] == "red":
+            account_results.append(
+                {
+                    "account": {"email": account_row["email"]},
+                    "status": "skipped",
+                    "automation_health": health,
+                    "moved": 0,
+                    "skipped": 0,
+                    "failed": 0,
+                }
+            )
+            continue
+        try:
+            result = await _automove_for_account(
+                requested_by_email="automation@scheduler",
+                target=account_row,
+                limit=limit,
+                min_confidence=min_confidence,
+            )
+            result["status"] = "completed"
+            result["automation_health"] = health
+            account_results.append(result)
+        except HTTPException as exc:
+            detail = exc.detail
+            account_results.append(
+                {
+                    "account": {"email": account_row["email"]},
+                    "status": "failed",
+                    "automation_health": health,
+                    "error": detail,
+                    "moved": 0,
+                    "skipped": 0,
+                    "failed": 1,
+                }
+            )
+
+    return {
+        "automation": True,
+        "scheduled": True,
+        "generated_at": _utcnow().isoformat(),
+        "accounts_seen": len(accounts),
+        "accounts_completed": sum(1 for r in account_results if r["status"] == "completed"),
+        "accounts_skipped": sum(1 for r in account_results if r["status"] == "skipped"),
+        "accounts_failed": sum(1 for r in account_results if r["status"] == "failed"),
+        "moved": sum(int(r.get("moved") or 0) for r in account_results),
+        "message_skipped": sum(int(r.get("skipped") or 0) for r in account_results),
+        "message_failed": sum(int(r.get("failed") or 0) for r in account_results),
+        "results": account_results,
     }
 
 

@@ -26,6 +26,7 @@ RUNTIME_VARIABLES = (
     "AZURE_AI_ENDPOINT",
     "AZURE_AI_DEPLOYMENT",
     "AZURE_AI_API_KEY",
+    "AUTOMATION_RUN_TOKEN",
 )
 
 SECRET_VARIABLES = {
@@ -33,6 +34,7 @@ SECRET_VARIABLES = {
     "MICROSOFT_ENTRA_CLIENT_SECRET",
     "AZURE_OPENAI_API_KEY",
     "AZURE_AI_API_KEY",
+    "AUTOMATION_RUN_TOKEN",
 }
 
 DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
@@ -121,6 +123,7 @@ def test_config_check_reflects_set_env(monkeypatch):
     monkeypatch.setenv("AZURE_AI_ENDPOINT", "https://example.ai.azure.com")
     monkeypatch.setenv("AZURE_AI_DEPLOYMENT", "phi-4")
     monkeypatch.setenv("AZURE_AI_API_KEY", azure_ai_key)
+    monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "automation-run-token")
 
     response = client.get("/config-check")
     assert response.status_code == 200
@@ -1413,6 +1416,7 @@ def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
     account_entry = payload["accounts"][0]
     assert account_entry["account"]["mailbox_access_ready"] is True
     assert account_entry["automation_health"]["state"] == "yellow"
+    assert account_entry["automation_health"]["automation_ready"] is True
     assert account_entry["folder_inventory"] == {
         "available": True,
         "total_folders": 3,

@@ -1,0 +1,37 @@
+name: Run Email Automation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/6 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dyc-comm-email-automation
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run guarded mailbox automation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call production automation runner
+        env:
+          AUTOMATION_RUN_TOKEN: ${{ secrets.AUTOMATION_RUN_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUTOMATION_RUN_TOKEN:-}" ]; then
+            echo "::error::AUTOMATION_RUN_TOKEN GitHub secret is not configured."
+            exit 1
+          fi
+
+          response="$(curl -sS --fail-with-body \
+            --max-time 540 \
+            -X POST \
+            -H "Authorization: Bearer ${AUTOMATION_RUN_TOKEN}" \
+            "https://api.comm.danielyoung.io/automation/run?limit=10")"
+
+          echo "${response}"
