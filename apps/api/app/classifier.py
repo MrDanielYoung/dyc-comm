@@ -38,6 +38,7 @@ ALLOWED_CATEGORIES: tuple[str, ...] = (
     "meetings_scheduling",
     "access_auth",
     "service_updates",
+    "it_reports",
     "newsletters_news",
     "marketing_promotions",
     "notifications_system",
@@ -406,6 +407,7 @@ _CATEGORY_FOLDER_MAP: dict[str, str] = {
     "notifications_system": "40 - Notifications",
     "marketing_promotions": "50 - Marketing",
     "legal_contracts": "70 - Contracts",
+    "it_reports": "90 - IT Reports",
 }
 
 

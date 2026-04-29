@@ -79,6 +79,24 @@ def test_high_confidence_newsletter_routes_to_news():
     assert decision.confidence_band == "high"
 
 
+def test_high_confidence_it_report_routes_to_it_reports():
+    decision = classify(
+        ClassificationInput(
+            subject="[MrDanielYoung/dyc-comm] PR run failed: CI",
+            body=(
+                "The repository workflow run failed for the latest pull "
+                "request. Review the CI logs and deployment status."
+            ),
+            sender="notifications@github.com",
+            rule_category="it_reports",
+            rule_confidence=0.95,
+        )
+    )
+    assert decision.recommended_folder == "90 - IT Reports"
+    assert decision.forced_review is False
+    assert decision.confidence_band == "high"
+
+
 def test_low_confidence_forces_review():
     decision = classify(
         ClassificationInput(

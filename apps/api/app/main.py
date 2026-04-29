@@ -2245,16 +2245,83 @@ def _sender_email_from_graph(message: dict[str, Any]) -> str:
     return ""
 
 
+def _deterministic_rule_for_message(
+    *,
+    subject: str,
+    sender: str,
+    body_preview: str,
+) -> tuple[str | None, float, str | None]:
+    """Return a conservative local category hint for obvious machine mail.
+
+    This is not an AI substitute. It only handles high-signal operational
+    patterns where the sender/subject already identify the message type.
+    Anything ambiguous still falls through to the classifier's Review default.
+    """
+    sender_l = sender.casefold()
+    subject_l = subject.casefold()
+    combined = f"{subject}\n{body_preview}".casefold()
+
+    if (
+        "github.com" in sender_l
+        or "[mrdanielyoung/dyc-comm]" in subject_l
+        or "pr run failed" in subject_l
+        or "workflow run" in subject_l
+        or "ci -" in subject_l
+    ):
+        return "it_reports", 0.95, "github/ci notification"
+
+    if sender_l == "team@mail.perplexity.ai" and (
+        "your task is complete" in subject_l
+        or "repository" in subject_l
+        or "review of" in subject_l
+    ):
+        return "it_reports", 0.95, "perplexity task/repository notification"
+
+    if any(
+        token in combined
+        for token in (
+            "pull request",
+            "repository",
+            "build failed",
+            "deployment failed",
+            "ci failed",
+            "run failed",
+        )
+    ):
+        return "it_reports", 0.85, "repository/build notification"
+
+    if any(
+        token in sender_l
+        for token in (
+            "noreply",
+            "no-reply",
+            "notification",
+            "notifications",
+        )
+    ):
+        return "notifications_system", 0.78, "machine notification sender"
+
+    return None, 0.0, None
+
+
 def _classification_input_from_message(
     message: dict[str, Any],
 ) -> classifier_module.ClassificationInput:
+    subject = str(message.get("subject") or "")
+    body_preview = str(message.get("bodyPreview") or "")[:INBOX_DRY_RUN_BODY_PREVIEW_CHARS]
+    sender = _sender_email_from_graph(message)
+    rule_category, rule_confidence, _rule_reason = _deterministic_rule_for_message(
+        subject=subject,
+        sender=sender,
+        body_preview=body_preview,
+    )
     return classifier_module.ClassificationInput(
-        subject=str(message.get("subject") or ""),
-        body=str(message.get("bodyPreview") or "")[:INBOX_DRY_RUN_BODY_PREVIEW_CHARS],
-        sender=_sender_email_from_graph(message),
+        subject=subject,
+        body=body_preview,
+        sender=sender,
         is_thread_reply=False,
-        rule_category=None,
-        rule_confidence=0.0,
+        rule_category=rule_category,
+        rule_confidence=rule_confidence,
     )
 
 
