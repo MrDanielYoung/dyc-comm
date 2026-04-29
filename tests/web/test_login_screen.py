@@ -93,6 +93,9 @@ inputs.reauthSignInUrl = (email) =>
   `https://api.example.com/auth/microsoft/start?login_hint=${encodeURIComponent(email)}`;
 if (inputs.fetchError === 'throw') {
   inputs.fetchError = new Error(inputs.fetchErrorMessage || 'boom');
+} else if (inputs.fetchError === 'timeout') {
+  inputs.fetchError = new Error('Session check timed out.');
+  inputs.fetchError.sessionTimeout = true;
 } else {
   inputs.fetchError = null;
 }
@@ -194,6 +197,38 @@ def test_api_unreachable_does_not_redirect():
     assert "Failed to fetch" in decision["notice"]
 
 
+def test_initial_session_timeout_redirects_to_microsoft():
+    """A slow first session check should hand off to Microsoft quickly
+    instead of leaving the operator on the app-hosted gate."""
+    decision = _decide(
+        {
+            "initial": True,
+            "suppressRedirect": False,
+            "payload": None,
+            "fetchError": "timeout",
+            "primarySignInUrl": PRIMARY_URL,
+        }
+    )
+    assert decision["kind"] == "redirect"
+    assert decision["url"] == PRIMARY_URL
+
+
+def test_suppressed_session_timeout_stays_on_gate():
+    """Retry/sign-out/auth-error flows intentionally suppress auto-redirect,
+    so a timeout there should remain visible instead of bouncing the user."""
+    decision = _decide(
+        {
+            "initial": True,
+            "suppressRedirect": True,
+            "payload": None,
+            "fetchError": "timeout",
+            "primarySignInUrl": PRIMARY_URL,
+        }
+    )
+    assert decision["kind"] == "gate"
+    assert decision["chip"] == "API unreachable"
+
+
 def test_retry_does_not_auto_redirect():
     """The retry/refresh buttons set suppressRedirect=true before
     re-evaluating, so even if the session is still unauthenticated the
@@ -258,6 +293,8 @@ def test_evaluate_session_uses_decide_helper():
     assert "decideSessionAction({" in html
     # The runtime call passes the live suppress flag in.
     assert "suppressRedirect: suppressInitialRedirect" in html
+    assert "INITIAL_SESSION_TIMEOUT_MS" in html
+    assert "sessionTimeout = true" in html
 
 
 def test_redirect_executes_window_location_replace():
