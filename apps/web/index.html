@@ -2044,6 +2044,7 @@
       const PRIMARY_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(PRIMARY_LOGIN_HINT)}`;
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
+      const INITIAL_SESSION_TIMEOUT_MS = 1800;
 
       const appHeader = document.getElementById("appHeader");
       const gateView = document.getElementById("gateView");
@@ -2356,10 +2357,30 @@
         return payload;
       }
 
-      async function fetchSession() {
-        const response = await fetch(`${API_BASE}/auth/session`, {
-          credentials: "include"
-        });
+      async function fetchSession({ timeoutMs } = {}) {
+        const controller = timeoutMs ? new AbortController() : null;
+        let timeoutId = null;
+        if (controller) {
+          timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+        }
+        let response;
+        try {
+          response = await fetch(`${API_BASE}/auth/session`, {
+            credentials: "include",
+            signal: controller ? controller.signal : undefined,
+          });
+        } catch (error) {
+          if (error && error.name === "AbortError") {
+            const timeoutError = new Error("Session check timed out.");
+            timeoutError.sessionTimeout = true;
+            throw timeoutError;
+          }
+          throw error;
+        } finally {
+          if (timeoutId) {
+            window.clearTimeout(timeoutId);
+          }
+        }
         if (!response.ok) {
           const error = new Error(`Session check failed with ${response.status}`);
           error.status = response.status;
@@ -3212,6 +3233,9 @@
         reauthSignInUrl,
       }) {
         if (fetchError) {
+          if (initial && !suppressRedirect && fetchError.sessionTimeout) {
+            return { kind: "redirect", url: primarySignInUrl };
+          }
           return {
             kind: "gate",
             chip: "API unreachable",
@@ -3257,7 +3281,11 @@
         let payload = null;
         let fetchError = null;
         try {
-          payload = await fetchSession();
+          payload = await fetchSession({
+            timeoutMs: initial && !suppressInitialRedirect
+              ? INITIAL_SESSION_TIMEOUT_MS
+              : undefined,
+          });
         } catch (error) {
           fetchError = error;
         }
