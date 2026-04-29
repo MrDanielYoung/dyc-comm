@@ -1501,8 +1501,9 @@ PENDING_REASON_INGESTION = (
     "Next step: connector worker that persists message metadata and timestamps."
 )
 PENDING_REASON_ACTIONS = (
-    "Mailbox actions are not yet logged; mailbox_action and audit_event tables "
-    "are defined in schema.md but not populated by the API/connector path."
+    "Aggregate action metrics are not yet wired. Approved inbox moves are "
+    "logged in mailbox_move_action and shown in /activity; the broader "
+    "mailbox_action/audit_event pipeline is still pending."
 )
 
 
@@ -1753,16 +1754,14 @@ def dashboard_summary(
 # =========================================================================
 #
 # These endpoints expose only honestly-derivable signals. The activity log
-# surfaces folder-inventory changes (the only actions the runtime currently
-# performs); message movement instrumentation is reported as pending until
-# the connector worker lands. Alerts are computed from current state — no
-# fabricated/example notices.
+# surfaces folder-inventory changes and approved inbox moves when those rows
+# exist. Alerts are computed from current state — no fabricated/example
+# notices.
 
 PENDING_REASON_MESSAGE_MOVEMENT = (
-    "Message movement instrumentation is pending. The runtime does not yet "
-    "log per-message ingest/route/move events; once the connector worker "
-    "writes message_ingestion_event / mailbox_action rows, this feed will "
-    "include them."
+    "No persisted account rows are available for this session, so message "
+    "movement cannot be queried yet. Approved inbox moves are logged once "
+    "a database-backed account exists and a Move action is run."
 )
 
 
