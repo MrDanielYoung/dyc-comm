@@ -306,7 +306,7 @@ def test_microsoft_callback_redirects_to_web_on_success(monkeypatch):
     )
     token_payload = {"access_token": "token", "id_token": id_token}
 
-    async def fake_exchange(code: str, verifier: str):
+    async def fake_exchange(code: str, verifier: str, tenant_segment: str | None = None):
         assert code == "sample-code"
         assert verifier == "stored-verifier"
         return token_payload
@@ -373,7 +373,7 @@ def _wire_callback(
     empty when the allow-list rejects the sign-in."""
     persisted: list[dict] = []
 
-    async def fake_exchange(code, verifier):
+    async def fake_exchange(code, verifier, tenant_segment=None):
         return {
             "access_token": "token",
             "id_token": _id_token({"tid": tid, "preferred_username": email}),
@@ -526,7 +526,7 @@ def test_callback_rejects_when_id_token_lacks_tid(monkeypatch):
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
     persisted: list[dict] = []
 
-    async def fake_exchange(code, verifier):
+    async def fake_exchange(code, verifier, tenant_segment=None):
         # No id_token at all, so tid cannot be established.
         return {"access_token": "token"}
 
@@ -558,7 +558,31 @@ def test_callback_rejects_when_id_token_lacks_tid(monkeypatch):
     assert persisted == []
 
 
-def test_authorize_url_uses_organizations_when_multi_tenant(monkeypatch):
+def test_authorize_url_pins_home_tenant_for_home_account_login_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?login_hint=daniel@danielyoung.io",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+    assert parsed.path.startswith(f"/{DECODING_OPTIONS_TENANT}/")
+    assert query["login_hint"] == ["daniel@danielyoung.io"]
+    assert response.cookies[main.AUTH_TENANT_COOKIE] == DECODING_OPTIONS_TENANT
+
+
+def test_authorize_url_pins_home_tenant_for_unhinted_login(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
     monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
@@ -573,7 +597,34 @@ def test_authorize_url_uses_organizations_when_multi_tenant(monkeypatch):
 
     assert response.status_code == 302
     parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+    assert parsed.path.startswith(f"/{DECODING_OPTIONS_TENANT}/")
+    assert "login_hint" not in query
+    assert response.cookies[main.AUTH_TENANT_COOKIE] == DECODING_OPTIONS_TENANT
+
+
+def test_authorize_url_uses_organizations_for_hinted_multi_tenant_flow(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?login_hint=daniel.young@digitalhealthworks.com",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
     assert parsed.path.startswith("/organizations/")
+    assert query["login_hint"] == ["daniel.young@digitalhealthworks.com"]
+    assert response.cookies[main.AUTH_TENANT_COOKIE] == "organizations"
 
 
 def test_authorize_url_pins_home_tenant_when_only_home_allowed(monkeypatch):
