@@ -31,10 +31,14 @@ It is **strictly non-destructive**:
 | --- | --- | --- |
 | `POST` | `/mail/inbox/classify-dryrun?account=<email>&limit=<n>` | Fetch up to `limit` recent inbox messages for `account` and persist a dry-run classification per message. |
 | `GET`  | `/mail/inbox/classify-dryrun/log?account=<email>&limit=<n>` | Read back the persisted dry-run rows for `account`, ordered by received date desc. |
+| `POST` | `/mail/inbox/move?account=<email>` | **Mutates the mailbox.** Body: `{"provider_message_ids": ["...", "..."]}`. Each id must already have a dry-run row. The API moves the messages to the recommended folder via Microsoft Graph and records a `mailbox_move_action` row per attempt. Forced-review rows go only to `10 - Review`. |
 
-Both endpoints require an authenticated session cookie
+All three endpoints require an authenticated session cookie
 (`dyc_account_email`). The `account` query parameter must match an account
 already linked to that session — otherwise the API returns `404`.
+
+The move endpoint is the only one that writes to the mailbox. It never
+deletes, sends, or archives mail. v1 explicitly excludes those.
 
 `limit` accepts `1..100`; default is `25`.
 
