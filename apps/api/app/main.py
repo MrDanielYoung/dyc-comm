@@ -2485,9 +2485,7 @@ def classify_inbox_dryrun_log(
 # linkable from either side.
 
 
-def _load_dry_run_row(
-    account_id: str, provider_message_id: str
-) -> dict[str, Any] | None:
+def _load_dry_run_row(account_id: str, provider_message_id: str) -> dict[str, Any] | None:
     if not _database_url():
         return None
 
@@ -2747,9 +2745,7 @@ async def move_classified_message(
         # Persist the failure so the audit trail reflects the attempt
         # before re-raising the original 502 to the caller.
         action_error = (
-            exc.detail
-            if isinstance(exc.detail, str)
-            else json.dumps(exc.detail, default=str)
+            exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, default=str)
         )
         _record_dry_run_move(
             account_id=target_account["account_id"],
