@@ -30,6 +30,16 @@ jobs:
       - name: Lint (ruff)
         run: ruff check apps tests
 
+      - name: Format diff (debug)
+        if: always()
+        run: |
+          {
+            echo '## ruff format diff'
+            echo '```diff'
+            ruff format --diff apps tests || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Format check (ruff format)
         run: ruff format --check apps tests
 
