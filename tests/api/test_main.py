@@ -1488,7 +1488,6 @@ def test_alerts_flags_no_connected_accounts_and_runtime(monkeypatch):
     codes = {item["code"] for item in payload["alerts"]}
     assert "runtime_config_missing" in codes
     assert "mailbox_access_not_ready" in codes
-    assert "activity_instrumentation_pending" in codes
     assert "database_unavailable" in codes
     assert payload["counts"]["error"] >= 1
 
@@ -1586,15 +1585,13 @@ def test_alerts_clean_when_state_is_healthy(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     codes = {item["code"] for item in payload["alerts"]}
-    # The pending-instrumentation note is always present, but the active-state
-    # codes should all be absent when the system is fully configured.
     assert "no_connected_accounts" not in codes
     assert "mailbox_access_not_ready" not in codes
     assert "runtime_config_missing" not in codes
     assert "database_unavailable" not in codes
     assert "folder_inventory_missing" not in codes
     assert "folder_inventory_incomplete" not in codes
-    assert "activity_instrumentation_pending" in codes
+    assert "activity_instrumentation_pending" not in codes
 
 
 def _two_account_rows(user_email):

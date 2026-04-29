@@ -2092,21 +2092,6 @@ def _compute_alerts(
                     }
                 )
 
-    alerts.append(
-        {
-            "code": "activity_instrumentation_pending",
-            "severity": "info",
-            "message": (
-                "Per-message activity (ingest, route, move) is not yet logged. "
-                "The Activity Log shows folder bootstrap/sync events only."
-            ),
-            "next_action": (
-                "Track follow-on work in docs/dashboard-instrumentation.md → "
-                "pending instrumentation."
-            ),
-        }
-    )
-
     return alerts
 
 
