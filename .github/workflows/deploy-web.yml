@@ -61,6 +61,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify source HTML contains expected shell strings
+        # Build-time guard against accidentally shipping an index.html that
+        # has been gutted of its login or post-login UI. The unauthenticated
+        # HTTP response can only assert the login shell (the dashboard
+        # markup is hidden behind auth state in the SPA), so this step
+        # covers the post-login strings by grepping the static source that
+        # will be baked into the image. If these ever move into JS-rendered
+        # templates, update or relax this list — but failing here is
+        # cheaper than discovering a regression after deploy.
+        run: |
+          set -euo pipefail
+          SOURCE=apps/web/index.html
+          if [ ! -f "${SOURCE}" ]; then
+            echo "Expected ${SOURCE} to exist" >&2
+            exit 1
+          fi
+          REQUIRED_SOURCE_STRINGS=(
+            'Sign in with Microsoft'
+            'Inbox Sorting'
+          )
+          FORBIDDEN_SOURCE_STRINGS=(
+            'Private app'
+          )
+          rc=0
+          for needle in "${REQUIRED_SOURCE_STRINGS[@]}"; do
+            if ! grep -qF "${needle}" "${SOURCE}"; then
+              echo "FAIL: ${SOURCE} missing required string: ${needle}" >&2
+              rc=1
+            else
+              echo "OK: ${SOURCE} contains: ${needle}"
+            fi
+          done
+          for needle in "${FORBIDDEN_SOURCE_STRINGS[@]}"; do
+            if grep -qF "${needle}" "${SOURCE}"; then
+              echo "FAIL: ${SOURCE} still contains stale string: ${needle}" >&2
+              rc=1
+            else
+              echo "OK: ${SOURCE} does not contain stale string: ${needle}"
+            fi
+          done
+          exit $rc
+
       - name: Azure login
         uses: azure/login@v2
         with:
@@ -188,16 +230,19 @@ jobs:
 
       - name: Verify deployed web content
         # The new revision is now the active traffic target, so we can do
-        # strict content checks. We only require strings that are
-        # genuinely tied to the current shell (the login CTA) and a
-        # negative check that the removed "Private app" subtitle is gone;
-        # this is enough to catch the "green build, stale site" failure
-        # mode without producing false negatives if conditional dashboard
-        # markup is ever moved into JS templates.
+        # strict content checks against the unauthenticated login shell.
+        # We only require strings that are genuinely present in the HTML
+        # served to a logged-out client (the Microsoft sign-in CTA) and a
+        # negative check that the removed "Private app" subtitle is gone.
+        # Post-login markup like "Inbox Sorting" lives in the same static
+        # index.html but is gated by JS auth state, so we don't require
+        # those here — the build-time grep above covers source regressions
+        # without producing false negatives over HTTP. Always dump a body
+        # snippet on failure so we can see exactly what was served.
         env:
           FQDN: ${{ steps.deploy.outputs.fqdn }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           STALE_STRING='Private app'
           REQUIRED_STRINGS=(
@@ -209,64 +254,91 @@ jobs:
             local label="$2"
             local extra_header="${3:-}"
             echo "::group::Validating ${label} (${url})"
-            local body=""
+            local body_file
+            body_file=$(mktemp)
+            local headers_file
+            headers_file=$(mktemp)
+            local http_code=""
             local attempt
             for attempt in 1 2 3 4 5 6; do
+              : > "${body_file}"
+              : > "${headers_file}"
+              local curl_args=(-sSL --max-time 25 -D "${headers_file}" -o "${body_file}" -w '%{http_code}')
               if [ -n "${extra_header}" ]; then
-                body=$(curl -fsSL --max-time 20 -H "${extra_header}" "${url}" || true)
-              else
-                body=$(curl -fsSL --max-time 20 "${url}" || true)
+                curl_args+=(-H "${extra_header}")
               fi
-              if [ -n "${body}" ]; then
+              http_code=$(curl "${curl_args[@]}" "${url}" 2>/dev/null || echo "000")
+              local size
+              size=$(wc -c < "${body_file}" | tr -d ' ')
+              echo "Attempt ${attempt}: HTTP ${http_code}, ${size} bytes"
+              if [ "${http_code}" = "200" ] && [ "${size}" -gt 0 ]; then
                 break
               fi
-              echo "Fetch attempt ${attempt} failed; retrying..."
+              echo "Fetch attempt ${attempt} not OK; retrying in 10s..."
               sleep 10
             done
-            if [ -z "${body}" ]; then
-              echo "Failed to fetch ${url} after retries" >&2
-              echo "::endgroup::"
-              return 1
-            fi
-            echo "Fetched ${#body} bytes from ${label}."
 
+            local size
+            size=$(wc -c < "${body_file}" | tr -d ' ')
             local rc=0
-            if printf '%s' "${body}" | grep -qF "${STALE_STRING}"; then
-              echo "FAIL: ${label} still contains stale string '${STALE_STRING}'" >&2
+            if [ "${http_code}" != "200" ] || [ "${size}" -eq 0 ]; then
+              echo "FAIL: could not fetch ${label} (last HTTP=${http_code}, size=${size})" >&2
               rc=1
             else
-              echo "OK: ${label} does not contain stale string."
-            fi
-            local needle
-            for needle in "${REQUIRED_STRINGS[@]}"; do
-              if ! printf '%s' "${body}" | grep -qF "${needle}"; then
-                echo "FAIL: ${label} missing required string: ${needle}" >&2
+              echo "Fetched ${size} bytes from ${label} (HTTP ${http_code})."
+
+              if grep -qF "${STALE_STRING}" "${body_file}"; then
+                echo "FAIL: ${label} still contains stale string '${STALE_STRING}'" >&2
                 rc=1
               else
-                echo "OK: ${label} contains: ${needle}"
+                echo "OK: ${label} does not contain stale string."
               fi
-            done
+              local needle
+              for needle in "${REQUIRED_STRINGS[@]}"; do
+                # Case-insensitive on the off chance an upstream layer
+                # rewrites casing; the underlying HTML is the source of
+                # truth and we still want to fail on missing content.
+                if ! grep -qiF "${needle}" "${body_file}"; then
+                  echo "FAIL: ${label} missing required string: ${needle}" >&2
+                  rc=1
+                else
+                  echo "OK: ${label} contains: ${needle}"
+                fi
+              done
+            fi
+
+            # Always dump headers + a body snippet to make failures easy
+            # to diagnose without re-running the workflow with extra
+            # logging.
             if [ "${rc}" -ne 0 ]; then
-              echo "--- first 2000 chars of ${label} response ---" >&2
-              printf '%s' "${body}" | head -c 2000 >&2 || true
+              echo "--- response headers for ${label} ---" >&2
+              head -c 2000 "${headers_file}" >&2 || true
+              echo >&2
+              echo "--- first 2000 chars of ${label} body ---" >&2
+              head -c 2000 "${body_file}" >&2 || true
               echo >&2
               echo "--- end ${label} response excerpt ---" >&2
             fi
+            rm -f "${body_file}" "${headers_file}"
             echo "::endgroup::"
             return $rc
           }
+
+          overall=0
 
           # The Container App FQDN check is authoritative: it bypasses any
           # custom-domain caching layer and goes straight to the active
           # revision we just verified above.
           if ! check_url "https://${FQDN}" "Container App FQDN"; then
-            exit 1
+            overall=1
           fi
 
           # The public custom domain points at the same Container App, but
-          # add a cache-busting query string and Pragma header to defeat
-          # any intermediate caches. Still required to pass — if the
-          # custom domain is stale here, end users see stale content.
+          # add a cache-busting query string and Cache-Control header to
+          # defeat any intermediate caches. Still required to pass — if
+          # the custom domain is stale here, end users see stale content.
           if ! check_url "${PUBLIC_WEB_URL}/?deploy=${IMAGE_TAG}" "Public custom domain" "Cache-Control: no-cache"; then
-            exit 1
+            overall=1
           fi
+
+          exit $overall
