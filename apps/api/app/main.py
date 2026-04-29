@@ -21,6 +21,7 @@ logger = logging.getLogger("dyc_comm.auth")
 
 AUTH_COOKIE = "dyc_auth_state"
 PKCE_COOKIE = "dyc_auth_pkce"
+AUTH_TENANT_COOKIE = "dyc_auth_tenant"
 EMAIL_COOKIE = "dyc_account_email"
 NAME_COOKIE = "dyc_account_name"
 MICROSOFT_SCOPE = "openid profile email offline_access User.Read Mail.Read Mail.ReadWrite"
@@ -239,26 +240,33 @@ def _code_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
 
-def _authorize_tenant_segment() -> str:
-    """Pick the tenant segment for the /authorize URL.
-
-    When the operator has explicitly allow-listed more than one tenant we
-    must ask Microsoft to authorize against ``/organizations`` so external
-    tenant users can complete sign-in (the Entra app must also be marked
-    multi-tenant in the portal — see docs/auth-troubleshooting.md). When
-    only the home tenant is allow-listed we keep using its tenant id, so a
-    misconfigured single-tenant app cannot accidentally accept tokens from
-    other tenants even if ``/common`` would have been resolvable.
-    """
+def _multi_tenant_authorize_enabled() -> bool:
     home = _normalize_id(os.getenv("MICROSOFT_ENTRA_TENANT_ID"))
     allowed = _allowed_tenant_ids()
-    if allowed and (allowed - {home}):
+    return bool(allowed and (allowed - {home}))
+
+
+def _token_tenant_segment() -> str:
+    if _multi_tenant_authorize_enabled():
+        return "organizations"
+    return _require_env("MICROSOFT_ENTRA_TENANT_ID")
+
+
+def _authorize_tenant_segment(login_hint: str | None = None) -> str:
+    """Pick the tenant segment for the /authorize URL.
+
+    Unhinted first sign-in uses the configured home tenant id so Microsoft
+    can render the tenant-branded page. Hinted reconnect/connect flows use
+    ``/organizations`` when external tenants are allow-listed, so those
+    specific cross-tenant accounts can still complete sign-in.
+    """
+    if login_hint and _multi_tenant_authorize_enabled():
         return "organizations"
     return _require_env("MICROSOFT_ENTRA_TENANT_ID")
 
 
 def _authorize_url(state: str, code_challenge: str, login_hint: str | None = None) -> str:
-    tenant_segment = _authorize_tenant_segment()
+    tenant_segment = _authorize_tenant_segment(login_hint=login_hint)
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
     params: dict[str, str] = {
@@ -286,8 +294,12 @@ def _web_redirect(status: str, **params: str) -> str:
     return f"{settings.web_app_url}/?{urlencode(query_items)}"
 
 
-async def _exchange_code(code: str, verifier: str) -> dict[str, Any]:
-    tenant_segment = _authorize_tenant_segment()
+async def _exchange_code(
+    code: str,
+    verifier: str,
+    tenant_segment: str | None = None,
+) -> dict[str, Any]:
+    tenant_segment = tenant_segment or _token_tenant_segment()
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     client_secret = _require_env("MICROSOFT_ENTRA_CLIENT_SECRET")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
@@ -1010,7 +1022,7 @@ def _update_account_tokens(account_id: str, token_response: dict[str, Any]) -> N
 
 
 async def _refresh_access_token(refresh_token: str) -> dict[str, Any]:
-    tenant_segment = _authorize_tenant_segment()
+    tenant_segment = _token_tenant_segment()
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     client_secret = _require_env("MICROSOFT_ENTRA_CLIENT_SECRET")
     token_url = f"https://login.microsoftonline.com/{tenant_segment}/oauth2/v2.0/token"
@@ -1319,6 +1331,7 @@ def microsoft_start(login_hint: str | None = Query(default=None)) -> Response:
     state = secrets.token_urlsafe(24)
     verifier = _code_verifier()
     hint = login_hint.strip() if login_hint else None
+    tenant_segment = _authorize_tenant_segment(login_hint=hint or None)
     authorize_url = _authorize_url(state, _code_challenge(verifier), login_hint=hint or None)
     response = RedirectResponse(authorize_url, status_code=302)
     response.set_cookie(
@@ -1337,6 +1350,14 @@ def microsoft_start(login_hint: str | None = Query(default=None)) -> Response:
         samesite="lax",
         max_age=600,
     )
+    response.set_cookie(
+        key=AUTH_TENANT_COOKIE,
+        value=tenant_segment,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+        max_age=600,
+    )
     return response
 
 
@@ -1348,6 +1369,7 @@ async def microsoft_callback(
     error_description: str | None = Query(default=None),
     stored_state: str | None = Cookie(default=None, alias=AUTH_COOKIE),
     stored_verifier: str | None = Cookie(default=None, alias=PKCE_COOKIE),
+    stored_tenant_segment: str | None = Cookie(default=None, alias=AUTH_TENANT_COOKIE),
 ) -> Response:
     if error:
         description = error_description or "Microsoft returned an authorization error."
@@ -1362,7 +1384,7 @@ async def microsoft_callback(
     if not stored_verifier:
         raise HTTPException(status_code=400, detail="Missing PKCE verifier.")
 
-    token_response = await _exchange_code(code, stored_verifier)
+    token_response = await _exchange_code(code, stored_verifier, stored_tenant_segment)
     profile = await _graph_profile(token_response["access_token"])
     # Enforce the tenant/email allow-list before any token persistence so
     # unauthorized accounts never land in the database. Raises 403 on deny.
@@ -1392,6 +1414,7 @@ async def microsoft_callback(
     )
     redirect.delete_cookie(AUTH_COOKIE)
     redirect.delete_cookie(PKCE_COOKIE)
+    redirect.delete_cookie(AUTH_TENANT_COOKIE)
     return redirect
 
 
@@ -1402,6 +1425,7 @@ def auth_logout() -> Response:
     response.delete_cookie(NAME_COOKIE)
     response.delete_cookie(AUTH_COOKIE)
     response.delete_cookie(PKCE_COOKIE)
+    response.delete_cookie(AUTH_TENANT_COOKIE)
     return response
 
 
