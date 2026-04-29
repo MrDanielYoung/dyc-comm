@@ -140,6 +140,8 @@ def test_account_nav_supports_multi_account_selection():
     assert 'data-testid="account-nav"' in html
     assert 'data-testid="account-nav-list"' in html
     assert "Select one mailbox here" in html
+    assert "health-dot" in html
+    assert "automation_health" in html
     assert "function selectAccount(email)" in html
     # Sorting log + dashboard reload on account switch.
     assert "loadSortingLog().catch" in html
@@ -207,3 +209,11 @@ def test_sorting_panel_exposes_move_action_with_confirmation():
     # The Action column header must be present so operators can see
     # which column carries the move control.
     assert "<th>Action</th>" in html
+
+
+def test_sorting_panel_exposes_safe_automation_action():
+    html = _read_html()
+    assert 'data-testid="sorting-automation-button"' in html
+    assert "Run safe automation" in html
+    assert "/mail/inbox/automove" in html
+    assert "window.confirm" in html

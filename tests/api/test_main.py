@@ -1149,6 +1149,12 @@ def test_accounts_returns_session_only_when_no_db(monkeypatch):
             "display_name": "Daniel Young",
             "status": "session_only",
             "mailbox_access_ready": False,
+            "automation_health": {
+                "state": "red",
+                "label": "Reconnect required",
+                "automation_ready": False,
+                "reasons": ["Account is session-only; reconnect so mailbox tokens are stored."],
+            },
             "token_updated_at": None,
             "created_at": None,
             "updated_at": None,
@@ -1175,6 +1181,16 @@ def test_accounts_returns_persisted_rows(monkeypatch):
             }
         ],
     )
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
     test_client = TestClient(main.app)
 
     response = test_client.get(
@@ -1187,6 +1203,7 @@ def test_accounts_returns_persisted_rows(monkeypatch):
     assert payload["accounts"][0]["account_id"] == "account-123"
     assert payload["accounts"][0]["status"] == "active"
     assert payload["accounts"][0]["mailbox_access_ready"] is True
+    assert payload["accounts"][0]["automation_health"]["state"] == "green"
 
 
 def test_visible_account_emails_for_allowed_session(monkeypatch):
@@ -1328,6 +1345,7 @@ def test_dashboard_summary_session_only_view(monkeypatch):
         "dyc_target_folders": 0,
     }
     assert payload["accounts"][0]["account"]["status"] == "session_only"
+    assert payload["accounts"][0]["account"]["automation_health"]["state"] == "red"
     assert payload["accounts"][0]["folder_inventory"]["available"] is False
     assert payload["accounts"][0]["email_volume"]["available"] is False
     assert payload["accounts"][0]["action_activity"]["available"] is False
@@ -1394,6 +1412,7 @@ def test_dashboard_summary_aggregates_persisted_account(monkeypatch):
 
     account_entry = payload["accounts"][0]
     assert account_entry["account"]["mailbox_access_ready"] is True
+    assert account_entry["automation_health"]["state"] == "yellow"
     assert account_entry["folder_inventory"] == {
         "available": True,
         "total_folders": 3,
@@ -1457,6 +1476,7 @@ def test_account_dashboard_returns_payload_for_match(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["account"]["account_id"] == "account-123"
+    assert payload["automation_health"]["state"] == "red"
     assert payload["folder_inventory"]["available"] is True
     assert payload["folder_inventory"]["total_folders"] == 0
     assert payload["email_volume"]["available"] is False

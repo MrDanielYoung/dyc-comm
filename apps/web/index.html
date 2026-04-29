@@ -1095,9 +1095,10 @@
 
       .account-nav-button {
         display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 4px;
+        align-items: center;
+        justify-content: space-between;
+        flex-direction: row;
+        gap: 10px;
         text-align: left;
         width: 100%;
         min-width: 0;
@@ -1140,6 +1141,30 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .account-nav-copy {
+        min-width: 0;
+      }
+
+      .health-dot {
+        flex: 0 0 auto;
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(23, 22, 27, 0.18);
+      }
+
+      .health-dot.green {
+        background: #1d7f46;
+      }
+
+      .health-dot.yellow {
+        background: #d39a1f;
+      }
+
+      .health-dot.red {
+        background: #b53a2c;
       }
 
       .account-nav-button .account-nav-meta {
@@ -1806,6 +1831,12 @@
                         id="sortingRefreshButton"
                         data-testid="sorting-refresh-button"
                       >Refresh log</button>
+                      <button
+                        class="secondary"
+                        type="button"
+                        id="sortingAutomationButton"
+                        data-testid="sorting-automation-button"
+                      >Run safe automation</button>
                       <label class="metric-reason" for="sortingLimit">
                         Limit
                         <input
@@ -2111,6 +2142,7 @@
       const sortingSelectedAccount = document.getElementById("sortingSelectedAccount");
       const sortingRunButton = document.getElementById("sortingRunButton");
       const sortingRefreshButton = document.getElementById("sortingRefreshButton");
+      const sortingAutomationButton = document.getElementById("sortingAutomationButton");
       const sortingLimitInput = document.getElementById("sortingLimit");
       const sortingStatus = document.getElementById("sortingStatus");
       const sortingSummary = document.getElementById("sortingSummary");
@@ -2162,6 +2194,9 @@
         }
         if (sortingRefreshButton) {
           sortingRefreshButton.disabled = !hasSelection;
+        }
+        if (sortingAutomationButton) {
+          sortingAutomationButton.disabled = !ready;
         }
 
         if (dashboardSortingSetupNotice) {
@@ -2469,7 +2504,9 @@
           accountNavList.innerHTML = entries.map((entry) => {
             const email = entry.email || "";
             const isSelected = accountState.selectedEmail === email;
-            const status = entry.mailbox_access_ready ? "Mailbox ready" : (entry.status || "linked");
+            const health = entry.automation_health || {};
+            const healthState = health.state || (entry.mailbox_access_ready ? "yellow" : "red");
+            const status = health.label || (entry.mailbox_access_ready ? "Mailbox ready" : (entry.status || "linked"));
             return `
               <button
                 type="button"
@@ -2479,8 +2516,15 @@
                 data-account-email="${escapeHtml(email)}"
                 aria-current="${isSelected ? "true" : "false"}"
               >
-                <span class="account-nav-email">${escapeHtml(email)}</span>
-                <span class="account-nav-meta">${escapeHtml(status)}</span>
+                <span class="account-nav-copy">
+                  <span class="account-nav-email">${escapeHtml(email)}</span>
+                  <span class="account-nav-meta">${escapeHtml(status)}</span>
+                </span>
+                <span
+                  class="health-dot ${escapeHtml(healthState)}"
+                  title="${escapeHtml((health.reasons || []).join(" ") || status)}"
+                  aria-label="${escapeHtml(status)}"
+                ></span>
               </button>
             `;
           }).join("");
@@ -3083,11 +3127,71 @@
         }
       }
 
+      async function runSafeAutomation() {
+        if (!sortingAutomationButton) return;
+        const account = accountState.selectedEmail;
+        if (!account) {
+          setSortingStatus("Select a connected account before running automation.", "error");
+          return;
+        }
+        if (!selectedAccountIsMailboxReady()) {
+          setSortingStatus(
+            `Mailbox access for ${account} is not ready. Reconnect this account before running automation.`,
+            "error"
+          );
+          applySortingReadinessUI();
+          return;
+        }
+        const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 10;
+        const limit = Math.min(Math.max(limitRaw, 1), 25);
+        const confirmed = window.confirm(
+          `Run safe automation for ${account}? High-confidence machine-sortable messages may be moved. Review, legal, sensitive, low-confidence, or unclear messages will be skipped and audited.`
+        );
+        if (!confirmed) return;
+
+        sortingAutomationButton.disabled = true;
+        if (sortingRunButton) sortingRunButton.disabled = true;
+        if (sortingRefreshButton) sortingRefreshButton.disabled = true;
+        setSortingStatus(`Running safe automation for ${account} (limit ${limit})…`);
+        const path =
+          `/mail/inbox/automove?account=${encodeURIComponent(account)}` +
+          `&limit=${encodeURIComponent(String(limit))}`;
+        try {
+          const response = await fetch(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const detail = (payload && payload.detail && payload.detail.message)
+              || (payload && payload.detail)
+              || `HTTP ${response.status}`;
+            setSortingStatus(`Automation failed: ${detail}`, "error");
+            setRawOutput(`Automation (${response.status})`, payload || "no body");
+            return;
+          }
+          setRawOutput(`Automation (${response.status})`, payload);
+          setSortingStatus(
+            `Automation complete for ${account}: ${payload.moved || 0} moved, ${payload.skipped || 0} skipped, ${payload.failed || 0} failed. See Audit Log for details.`,
+            payload.failed ? "error" : "success"
+          );
+          await loadSortingLog();
+          await loadActivity();
+          await loadAccounts();
+        } catch (error) {
+          setSortingStatus(`Automation request failed: ${error.message}`, "error");
+        } finally {
+          sortingAutomationButton.disabled = false;
+          applySortingReadinessUI();
+        }
+      }
+
       function renderDashboardAccount(entry) {
         const account = entry.account || {};
         const folder = entry.folder_inventory || {};
         const volume = entry.email_volume || {};
         const action = entry.action_activity || {};
+        const health = entry.automation_health || account.automation_health || {};
 
         const folderLive = folder.available
           ? `<span class="metric-tag live">live</span>`
@@ -3106,6 +3210,13 @@
               <h3>${escapeHtml(account.email || "Unknown account")}</h3>
               <span class="status-chip ${account.mailbox_access_ready ? "connected" : "idle"}">
                 ${account.mailbox_access_ready ? "Mailbox ready" : (account.status || "session only")}
+              </span>
+            </div>
+            <div class="metric-row">
+              <span class="metric-label">Automation health</span>
+              <span class="metric-value">
+                <span class="health-dot ${escapeHtml(health.state || "red")}" aria-hidden="true"></span>
+                <strong>${escapeHtml(health.label || "Unknown")}</strong>
               </span>
             </div>
             <div class="metric-row">
@@ -3431,6 +3542,9 @@
       }
       if (sortingRunButton) {
         sortingRunButton.addEventListener("click", () => runSortingDryRun());
+      }
+      if (sortingAutomationButton) {
+        sortingAutomationButton.addEventListener("click", () => runSafeAutomation());
       }
       if (sortingRefreshButton) {
         sortingRefreshButton.addEventListener("click", () => loadSortingLog());

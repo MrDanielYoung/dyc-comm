@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from apps.api.app import classifier as classifier_module
 from apps.api.app import main
 
 
@@ -554,3 +555,187 @@ def test_activity_log_includes_move_events(monkeypatch):
     assert events[1]["move"]["provider_message_id"] == "msg-1"
     # No pending_instrumentation when movement is available.
     assert payload["pending_instrumentation"] == []
+
+
+def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
+    _install_account_session(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+
+    async def fake_list_messages(token, limit):
+        return [
+            {
+                "id": "msg-1",
+                "subject": "CI run failed",
+                "bodyPreview": "Repository build failed",
+                "parentFolderId": "inbox-folder-id",
+                "from": {"emailAddress": {"address": "notifications@github.com"}},
+            }
+        ]
+
+    monkeypatch.setattr(main, "_list_inbox_messages", fake_list_messages)
+
+    async def fake_classify(ci, provider_config=None):
+        return classifier_module.ClassificationDecision(
+            recommended_folder="90 - IT Reports",
+            category="it_reports",
+            confidence=0.96,
+            confidence_band="high",
+            reasons=["repository notification"],
+            safety_flags=[],
+            forced_review=False,
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(classifier_module, "classify_with_provider", fake_classify)
+    monkeypatch.setattr(main, "_persist_dry_run_classification", lambda **kwargs: None)
+    monkeypatch.setattr(
+        main,
+        "_load_dry_run_row",
+        lambda account_id, message_id: {
+            "id": "dryrun-row-id",
+            "current_folder": "inbox-folder-id",
+        },
+    )
+    monkeypatch.setattr(main, "_existing_succeeded_move", lambda account_id, msg_id: None)
+    _install_inventory(monkeypatch, {"90 - IT Reports": "it-folder-id"})
+
+    graph_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_post(token, path, payload):
+        graph_calls.append((token, path, payload))
+        return {"id": "moved-msg-1"}
+
+    monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+    persisted: list[dict] = []
+    monkeypatch.setattr(
+        main,
+        "_persist_move_action",
+        lambda **kwargs: persisted.append(kwargs) or "action-row-id",
+    )
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/automove",
+        params={"account": "daniel@danielyoung.io", "limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["automation"] is True
+    assert payload["moved"] == 1
+    assert payload["skipped"] == 0
+    assert graph_calls == [
+        ("graph-token", "/me/messages/msg-1/move", {"destinationId": "it-folder-id"})
+    ]
+    assert persisted[0]["status"] == "succeeded"
+    assert persisted[0]["destination_folder_name"] == "90 - IT Reports"
+
+
+def test_automove_skips_forced_review_without_graph_call(monkeypatch):
+    _install_account_session(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+
+    async def fake_list_messages(token, limit):
+        return [
+            {
+                "id": "msg-1",
+                "subject": "Contract terms",
+                "bodyPreview": "Please review this agreement",
+                "parentFolderId": "inbox-folder-id",
+                "from": {"emailAddress": {"address": "legal@example.com"}},
+            }
+        ]
+
+    monkeypatch.setattr(main, "_list_inbox_messages", fake_list_messages)
+
+    async def fake_classify(ci, provider_config=None):
+        return classifier_module.ClassificationDecision(
+            recommended_folder="10 - Review",
+            category="legal_contracts",
+            confidence=0.99,
+            confidence_band="high",
+            reasons=["legal"],
+            safety_flags=["legal_or_contractual"],
+            forced_review=True,
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(classifier_module, "classify_with_provider", fake_classify)
+    monkeypatch.setattr(main, "_persist_dry_run_classification", lambda **kwargs: None)
+    monkeypatch.setattr(
+        main,
+        "_load_dry_run_row",
+        lambda account_id, message_id: {
+            "id": "dryrun-row-id",
+            "current_folder": "inbox-folder-id",
+        },
+    )
+
+    async def fail_graph_post(*args, **kwargs):
+        raise AssertionError("forced-review automation must not call Graph move")
+
+    monkeypatch.setattr(main, "_graph_post", fail_graph_post)
+    persisted: list[dict] = []
+    monkeypatch.setattr(
+        main,
+        "_persist_move_action",
+        lambda **kwargs: persisted.append(kwargs) or "action-row-id",
+    )
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/automove",
+        params={"account": "daniel@danielyoung.io", "limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["moved"] == 0
+    assert payload["skipped"] == 1
+    assert payload["results"][0]["error"] == "automation_forced_review"
+    assert persisted[0]["status"] == "skipped"
+    assert persisted[0]["error"] == "automation_forced_review"
+
+
+def test_automove_rejects_unhealthy_account(monkeypatch):
+    _install_account_session(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "red",
+            "label": "Folders missing",
+            "automation_ready": False,
+            "reasons": ["Run Bootstrap."],
+        },
+    )
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/automove",
+        params={"account": "daniel@danielyoung.io", "limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["automation_health"]["state"] == "red"
