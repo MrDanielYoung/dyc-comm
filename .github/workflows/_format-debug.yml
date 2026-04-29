@@ -1,0 +1,30 @@
+name: Format Debug
+
+on:
+  push:
+    branches:
+      - feat-inbox-dryrun-move
+
+jobs:
+  format-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r apps/api/requirements-dev.txt
+      - name: Run ruff format diff
+        id: diff
+        run: |
+          ruff format --diff apps tests > /tmp/diff.txt 2>&1 || true
+          cat /tmp/diff.txt
+      - name: Post diff as PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR=$(gh pr list --head feat-inbox-dryrun-move --json number -q '.[0].number')
+          if [ -n "$PR" ]; then
+            BODY=$(printf '<!-- format-debug -->\n```diff\n%s\n```\n' "$(head -c 60000 /tmp/diff.txt)")
+            gh pr comment "$PR" --body "$BODY"
+          fi
