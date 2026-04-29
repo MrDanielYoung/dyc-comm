@@ -1754,6 +1754,22 @@
                         />
                       </label>
                     </div>
+                    <div
+                      class="nondestructive-banner"
+                      data-testid="sorting-move-banner"
+                      style="background: #fff7e6; border-color: #f0c97a;"
+                    >
+                      <span aria-hidden="true">&#9888;</span>
+                      <span>
+                        <strong>Move action:</strong>
+                        clicking <strong>Move</strong> on a row asks Microsoft Graph
+                        to move that one message into its recommended folder. Each
+                        move is recorded in the activity log. <code>10 - Review</code>
+                        rows (and any row flagged <em>forced review</em>) move only
+                        to <code>10 - Review</code>. Nothing is deleted, sent, or
+                        archived. You will be asked to confirm before each move.
+                      </span>
+                    </div>
                     <p
                       class="metric-reason"
                       id="sortingStatus"
@@ -1775,11 +1791,12 @@
                             <th>Confidence</th>
                             <th>Reasons / Flags</th>
                             <th>Status</th>
+                            <th>Action</th>
                           </tr>
                         </thead>
                         <tbody id="sortingTableBody" data-testid="sorting-table-body">
                           <tr>
-                            <td colspan="6" class="empty-state">
+                            <td colspan="7" class="empty-state">
                               No dry-run results loaded yet. Click
                               <strong>Run inbox classification (dry-run)</strong>
                               above to fetch the most recent inbox messages and
@@ -1790,10 +1807,11 @@
                       </table>
                     </div>
                     <p class="metric-reason">
-                      Acting on a recommendation (moving the message into the
-                      suggested folder) requires explicit, per-message
-                      confirmation and is not yet wired up in this build —
-                      see <code>docs/inbox-dryrun.md</code> for the runbook.
+                      Per-row <strong>Move</strong> applies the recommendation
+                      to that single message after a confirmation prompt. Moves
+                      are audited in the activity log. Nothing is deleted or
+                      sent — see <code>docs/inbox-dryrun.md</code> for the
+                      runbook.
                     </p>
                   </section>
                 </div>
@@ -2669,6 +2687,20 @@
         const error = entry.error
           ? `<div class="metric-reason" style="color: var(--danger);">${escapeHtml(entry.error)}</div>`
           : "";
+        const messageId = entry.provider_message_id || "";
+        const targetFolder = rec
+          ? (rec.forced_review ? "10 - Review" : (rec.recommended_folder || "10 - Review"))
+          : "10 - Review";
+        const moveCell = messageId
+          ? `<button
+                class="secondary sorting-move-button"
+                type="button"
+                data-testid="sorting-move-button"
+                data-message-id="${escapeHtml(messageId)}"
+                data-target-folder="${escapeHtml(targetFolder)}"
+              >Move</button>
+              <div class="metric-reason">to <code>${escapeHtml(targetFolder)}</code></div>`
+          : `<span class="metric-tag pending">no id</span>`;
         return `
           <tr>
             <td>${received}</td>
@@ -2683,6 +2715,7 @@
               <div>${status}</div>
               ${error}
             </td>
+            <td>${moveCell}</td>
           </tr>
         `;
       }
@@ -2692,7 +2725,7 @@
         if (!entries || !entries.length) {
           sortingTableBody.innerHTML = `
             <tr>
-              <td colspan="6" class="empty-state">
+              <td colspan="7" class="empty-state">
                 No dry-run results for this account yet. Click
                 <strong>Run inbox classification (dry-run)</strong> above.
               </td>
@@ -2786,6 +2819,73 @@
           updateDashboardSortingSummary(null);
           setSortingStatus(`Dry-run log request failed: ${error.message}`, "error");
           return null;
+        }
+      }
+
+      async function moveSortingMessage(button, messageId, targetFolder) {
+        const account = accountState.selectedEmail;
+        if (!account) {
+          setSortingStatus(
+            "Select a connected account before moving messages.",
+            "error"
+          );
+          return;
+        }
+        if (!selectedAccountIsMailboxReady()) {
+          setSortingStatus(
+            `Mailbox access for ${account} is not ready. Reconnect this account first.`,
+            "error"
+          );
+          return;
+        }
+        const confirmed = window.confirm(
+          `Move this message to ${targetFolder}?\n\n` +
+          `Account: ${account}\n` +
+          `This calls Microsoft Graph and will move the message in the live mailbox. ` +
+          `Nothing is deleted or sent. The action will be recorded in the activity log.`
+        );
+        if (!confirmed) return;
+        button.disabled = true;
+        const originalLabel = button.textContent;
+        button.textContent = "Moving…";
+        setSortingStatus(`Moving 1 message to ${targetFolder} for ${account}…`);
+        try {
+          const path = `/mail/inbox/move?account=${encodeURIComponent(account)}`;
+          const response = await fetch(`${API_BASE}${path}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider_message_ids: [messageId] }),
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            const detail = (payload && payload.detail) || `HTTP ${response.status}`;
+            setSortingStatus(`Move failed: ${detail}`, "error");
+            setRawOutput(`Move (${response.status})`, payload || "no body");
+            button.disabled = false;
+            button.textContent = originalLabel;
+            return;
+          }
+          setRawOutput(`Move (${response.status})`, payload);
+          const result = (payload.results || [])[0] || {};
+          const status = result.status || "unknown";
+          if (status === "succeeded" || status === "already_moved") {
+            setSortingStatus(
+              `Moved to ${result.destination_folder_name || targetFolder} ` +
+              `(${status}). The change is recorded in the activity log.`,
+              "success"
+            );
+          } else {
+            setSortingStatus(
+              `Move ${status}: ${result.error || "no detail"}.`,
+              "error"
+            );
+          }
+          await loadSortingLog();
+        } catch (error) {
+          setSortingStatus(`Move request failed: ${error.message}`, "error");
+          button.disabled = false;
+          button.textContent = originalLabel;
         }
       }
 
@@ -3129,6 +3229,18 @@
       }
       if (sortingRefreshButton) {
         sortingRefreshButton.addEventListener("click", () => loadSortingLog());
+      }
+      if (sortingTableBody) {
+        sortingTableBody.addEventListener("click", (event) => {
+          const button = event.target && event.target.closest
+            ? event.target.closest('[data-testid="sorting-move-button"]')
+            : null;
+          if (!button) return;
+          const messageId = button.getAttribute("data-message-id");
+          const targetFolder = button.getAttribute("data-target-folder") || "10 - Review";
+          if (!messageId) return;
+          moveSortingMessage(button, messageId, targetFolder);
+        });
       }
       if (dashboardSortingOpen) {
         dashboardSortingOpen.addEventListener("click", () => activateTab("sorting"));
