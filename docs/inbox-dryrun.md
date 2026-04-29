@@ -21,7 +21,10 @@ It is **strictly non-destructive**:
   per-message error.
 - `10 - Review` is the fallback recommendation for any unclear,
   sensitive, or low-confidence message.
-- When `AZURE_OPENAI_*` / `AZURE_AI_*` env vars are absent the
+- When `AZURE_OPENAI_*` / `AZURE_AI_*` env vars are configured, the
+  classifier asks the provider for a strict JSON category/confidence
+  recommendation, then applies local safety overrides.
+- When provider env vars are absent or the provider call fails, the
   deterministic classifier runs and the response is marked
   `provider_consulted: false` (the per-row `provider` column is `none`).
 
@@ -76,10 +79,10 @@ browser:
    - a results table with one row per message showing the recommended
      folder, category, confidence (with band), reasons, safety flags,
      `forced_review` status, and any per-message error.
-3. Acting on a recommendation (moving the message into the suggested
-   folder) is **not** wired up in this build — that requires
-   per-message confirmation and an audit-logged write path. The UI
-   makes this explicit (`0 messages moved` is shown in the summary).
+3. Acting on a recommendation uses the per-row **Move** button. The UI
+   asks for confirmation, then the API calls Microsoft Graph
+   `POST /me/messages/{id}/move` and records a `mailbox_move_action`
+   row. Forced-review rows can only move to `10 - Review`.
 
 The account selector in the left rail scopes every panel — including the
 Inbox Sorting tab — to the chosen connected account. The default is
@@ -107,17 +110,21 @@ These are the exact steps a human operator should run with
    `recommendation` per message (`recommended_folder` always set,
    `forced_review: true` for unclear/sensitive/low-confidence messages),
    and `provider.consulted: false` if Azure OpenAI/AI is not configured.
+   When Azure is configured, clear matches should recommend their target
+   folders while ambiguous/sensitive/low-confidence messages still route
+   to `10 - Review`.
 4. **Read the log back**:
    ```sh
    python -m apps.api.app.cli inbox-dryrun-log --account daniel@danielyoung.io --limit 25
    ```
    Expected: the rows just persisted, sorted by received date desc.
-5. **Verify the mailbox is unchanged.** In Outlook, confirm:
+5. **Verify the dry-run did not change the mailbox.** In Outlook, confirm:
    - No messages have moved out of `Inbox`.
    - No new mail folders were created (other than any you bootstrapped
      in step 2).
    - No items appear in `Sent Items`, `Drafts`, or `Deleted Items`
      because of the scan.
+   Use the **Move** button only after reviewing a row you approve.
 6. **Re-run the dry-run.** It is idempotent — re-classifying the same
    message updates the existing row (`UNIQUE(account_id,
    provider_message_id)` upserts).

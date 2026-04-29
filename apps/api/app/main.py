@@ -1307,7 +1307,7 @@ async def classify_recommend(request: Request) -> dict[str, Any]:
         rule_confidence=rule_confidence,
     )
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
-    decision = classifier_module.classify(ci, provider_config=provider_cfg)
+    decision = await classifier_module.classify_with_provider(ci, provider_config=provider_cfg)
     return {
         "dry_run": True,
         "recommendation": decision.to_dict(),
@@ -2505,11 +2505,10 @@ async def classify_inbox_dryrun(
     """Fetch a small recent inbox batch and produce dry-run classifications.
 
     Strictly read-only against Microsoft Graph (GET /me/mailFolders/inbox/
-    messages with $top + $select). The classifier itself does not call any
-    AI provider in this slice — when Azure OpenAI / Azure AI is not
-    configured, results are marked ``provider_not_consulted`` and the
-    deterministic fallback's recommendation is used. ``10 - Review`` is
-    the fallback folder for any unclear/sensitive/low-confidence message.
+    messages with $top + $select). When Azure OpenAI / Azure AI is
+    configured, the classifier asks the provider for a category/confidence
+    recommendation, then applies local safety rules. ``10 - Review`` is
+    the fallback folder for unclear/sensitive/low-confidence messages.
     """
     user_email = _resolve_session_user_email(linked_email)
     rows = _list_user_accounts(user_email)
@@ -2524,7 +2523,10 @@ async def classify_inbox_dryrun(
     for message in messages:
         try:
             ci = _classification_input_from_message(message)
-            decision = classifier_module.classify(ci, provider_config=provider_cfg)
+            decision = await classifier_module.classify_with_provider(
+                ci,
+                provider_config=provider_cfg,
+            )
             _persist_dry_run_classification(
                 account_id=account_record["account_id"],
                 account_email=account_record["email"],
@@ -2578,7 +2580,7 @@ async def classify_inbox_dryrun(
         "provider": {
             "selected": provider_cfg.provider,
             "configured": provider_cfg.is_configured(),
-            "consulted": False,
+            "consulted": any(bool(r.get("provider_consulted")) for r in results),
         },
         "review_folder": classifier_module.REVIEW_FOLDER,
         "results": results,

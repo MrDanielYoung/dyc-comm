@@ -23,12 +23,17 @@ Design goals (see docs/ai-classifier-policy.md and architecture.md §9):
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import httpx
+
 REVIEW_FOLDER = "10 - Review"
+logger = logging.getLogger("dyc_comm.classifier")
 
 # Allowed primary categories. Mirrors architecture.md §8 taxonomy.
 ALLOWED_CATEGORIES: tuple[str, ...] = (
@@ -192,9 +197,9 @@ class AzureAIProviderConfig:
     Loaded via :meth:`from_env`. Presence of these env vars is what
     ``/config-check`` reports; values are never exposed in responses.
 
-    The classifier does not call the provider in this slice — this object
-    exists so future workers can wire a real call without touching the
-    decision contract.
+    The classifier can consult Azure OpenAI / Azure AI when this object is
+    fully configured. Missing or failing provider calls fall back to the
+    deterministic path without breaking dry-run classification.
     """
 
     provider: Literal["azure_openai", "azure_ai", "none"]
@@ -219,7 +224,19 @@ class AzureAIProviderConfig:
         )
 
     def is_configured(self) -> bool:
-        return self.provider != "none" and bool(self.endpoint) and bool(self.deployment)
+        return (
+            self.provider != "none"
+            and bool(self.endpoint)
+            and bool(self.deployment)
+            and self.has_api_key
+        )
+
+    def api_key(self) -> str | None:
+        if self.provider == "azure_openai":
+            return os.getenv("AZURE_OPENAI_API_KEY")
+        if self.provider == "azure_ai":
+            return os.getenv("AZURE_AI_API_KEY")
+        return None
 
 
 def _select_provider() -> Literal["azure_openai", "azure_ai", "none"]:
@@ -280,6 +297,15 @@ class _SafetyAssessment:
             self.reasons.append(reason)
 
 
+@dataclass(frozen=True)
+class _ModelSignal:
+    category: str
+    confidence: float
+    reasons: tuple[str, ...]
+    provider_consulted: bool
+    provider: str | None
+
+
 def _assess_safety(payload: ClassificationInput) -> _SafetyAssessment:
     """Pure deterministic safety pass.
 
@@ -336,6 +362,72 @@ def _normalize_rule_category(value: str | None) -> str:
     return "unknown_ambiguous"
 
 
+def _sanitize_confidence(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _decision_from_signals(
+    payload: ClassificationInput,
+    *,
+    provider_config: AzureAIProviderConfig | None,
+    model_signal: _ModelSignal | None = None,
+) -> ClassificationDecision:
+    safety = _assess_safety(payload)
+    reasons: list[str] = list(safety.reasons)
+
+    rule_category = _normalize_rule_category(payload.rule_category)
+    rule_confidence = _sanitize_confidence(payload.rule_confidence)
+
+    category = rule_category
+    confidence = rule_confidence
+    provider_consulted = False
+    provider = provider_config.provider if provider_config else None
+
+    if rule_category != "unknown_ambiguous" and rule_confidence > 0:
+        reasons.append(
+            f"deterministic rule suggested {rule_category} at confidence {rule_confidence:.2f}"
+        )
+
+    if model_signal and model_signal.provider_consulted:
+        provider_consulted = True
+        provider = model_signal.provider
+        if rule_category == "unknown_ambiguous" or model_signal.confidence > rule_confidence:
+            category = model_signal.category
+            confidence = model_signal.confidence
+        reasons.extend(model_signal.reasons)
+
+    forced_review = False
+
+    if safety.flags:
+        forced_review = True
+        reasons.append("safety override: forcing route to 10 - Review")
+
+    if confidence < MEDIUM_THRESHOLD:
+        forced_review = True
+        if not safety.flags:
+            reasons.append("confidence below medium threshold — defaulting to 10 - Review")
+
+    if category == "legal_contracts" and "legal_or_contractual" in safety.flags:
+        forced_review = True
+
+    recommended_folder = REVIEW_FOLDER if forced_review else _category_to_folder(category)
+
+    return ClassificationDecision(
+        category=category,
+        recommended_folder=recommended_folder,
+        confidence=confidence,
+        confidence_band=_band(confidence),
+        reasons=tuple(dict.fromkeys(reasons)),
+        safety_flags=tuple(safety.flags),
+        forced_review=forced_review,
+        provider_consulted=provider_consulted,
+        provider=provider,
+    )
+
+
 def classify(
     payload: ClassificationInput,
     *,
@@ -351,52 +443,141 @@ def classify(
     *raise* confidence on already-allowed categories — never to bypass the
     forced-review rules below.
     """
-    safety = _assess_safety(payload)
-    reasons: list[str] = list(safety.reasons)
+    return _decision_from_signals(payload, provider_config=provider_config)
 
-    rule_category = _normalize_rule_category(payload.rule_category)
-    rule_confidence = max(0.0, min(1.0, payload.rule_confidence))
 
-    # Start from the deterministic rule signal (if any). With no rule and
-    # no provider call we sit at unknown_ambiguous / 0.0 confidence, which
-    # naturally routes to Review.
-    category = rule_category
-    confidence = rule_confidence
-    if rule_category != "unknown_ambiguous" and rule_confidence > 0:
-        reasons.append(
-            f"deterministic rule suggested {rule_category} at confidence {rule_confidence:.2f}"
-        )
+_CLASSIFICATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "category": {
+            "type": "string",
+            "enum": list(ALLOWED_CATEGORIES),
+            "description": "Best category for the email.",
+        },
+        "confidence": {
+            "type": "number",
+            "description": "Classifier confidence from 0.0 to 1.0.",
+        },
+        "reasons": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Short operator-readable reasons for the classification.",
+        },
+    },
+    "required": ["category", "confidence", "reasons"],
+}
 
-    forced_review = False
 
-    if safety.flags:
-        forced_review = True
-        reasons.append("safety override: forcing route to 10 - Review")
+def _provider_url(config: AzureAIProviderConfig) -> str:
+    endpoint = (config.endpoint or "").rstrip("/")
+    deployment = config.deployment or ""
+    api_version = config.api_version or "2024-08-01-preview"
+    return f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
 
-    if confidence < MEDIUM_THRESHOLD:
-        forced_review = True
-        if not safety.flags:
-            reasons.append("confidence below medium threshold — defaulting to 10 - Review")
 
-    # legal_contracts is allowed to route to 70 - Contracts only when both
-    # the deterministic signal is high-confidence AND the legal-keyword
-    # safety flag was NOT triggered (e.g. clear DocuSign envelope). If the
-    # legal flag fired, we never auto-route legal mail.
-    if category == "legal_contracts" and "legal_or_contractual" in safety.flags:
-        forced_review = True
+def _provider_messages(payload: ClassificationInput) -> list[dict[str, str]]:
+    categories = ", ".join(ALLOWED_CATEGORIES)
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Classify one email for a private Microsoft 365 mailbox. "
+                "Return only the strict JSON schema. Do not recommend actions. "
+                f"Allowed categories: {categories}. Prefer unknown_ambiguous "
+                "when the message needs human judgment."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "sender": payload.sender,
+                    "subject": payload.subject,
+                    "body_preview": payload.body,
+                    "is_thread_reply": payload.is_thread_reply,
+                    "rule_category_hint": payload.rule_category,
+                    "rule_confidence_hint": payload.rule_confidence,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
 
-    recommended_folder = REVIEW_FOLDER if forced_review else _category_to_folder(category)
 
-    return ClassificationDecision(
+async def _call_azure_classifier(
+    payload: ClassificationInput,
+    config: AzureAIProviderConfig,
+) -> _ModelSignal | None:
+    api_key = config.api_key()
+    if not config.is_configured() or not api_key:
+        return None
+
+    request_payload = {
+        "messages": _provider_messages(payload),
+        "temperature": 0,
+        "max_tokens": 400,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "email_classification",
+                "strict": True,
+                "schema": _CLASSIFICATION_SCHEMA,
+            },
+        },
+    }
+    headers = {"api-key": api_key, "Content-Type": "application/json"}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                _provider_url(config),
+                headers=headers,
+                json=request_payload,
+            )
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+    except Exception as exc:
+        logger.warning("classifier.provider_failed provider=%s error=%s", config.provider, exc)
+        return None
+
+    category = _normalize_rule_category(parsed.get("category"))
+    confidence = _sanitize_confidence(parsed.get("confidence"))
+    raw_reasons = parsed.get("reasons")
+    reasons = (
+        tuple(str(item)[:240] for item in raw_reasons if item)
+        if isinstance(raw_reasons, list)
+        else ()
+    )
+
+    return _ModelSignal(
         category=category,
-        recommended_folder=recommended_folder,
         confidence=confidence,
-        confidence_band=_band(confidence),
-        reasons=tuple(reasons),
-        safety_flags=tuple(safety.flags),
-        forced_review=forced_review,
-        provider_consulted=False,
-        provider=provider_config.provider if provider_config else None,
+        reasons=reasons or (f"{config.provider} classified message as {category}",),
+        provider_consulted=True,
+        provider=config.provider,
+    )
+
+
+async def classify_with_provider(
+    payload: ClassificationInput,
+    *,
+    provider_config: AzureAIProviderConfig | None = None,
+) -> ClassificationDecision:
+    """Classify with Azure OpenAI/Azure AI when configured.
+
+    The provider only supplies category/confidence/reasons. The local
+    deterministic safety pass still decides whether to force ``10 - Review``.
+    """
+    if not provider_config or not provider_config.is_configured():
+        return classify(payload, provider_config=provider_config)
+
+    model_signal = await _call_azure_classifier(payload, provider_config)
+    return _decision_from_signals(
+        payload,
+        provider_config=provider_config,
+        model_signal=model_signal,
     )
 
 

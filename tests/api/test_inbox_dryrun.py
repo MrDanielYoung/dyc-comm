@@ -255,6 +255,71 @@ def test_classify_inbox_dryrun_routes_obvious_repo_notifications(monkeypatch):
         assert recommendation["confidence"] == 0.95
 
 
+def test_classify_inbox_dryrun_uses_configured_azure_provider(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+
+    async def fake_token(email):
+        return "graph-token", {
+            "account_id": "account-123",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_graph_get(token, path, params=None):
+        return {
+            "value": [
+                {
+                    "id": "msg-provider",
+                    "receivedDateTime": "2026-04-29T08:10:00Z",
+                    "subject": "Your report is ready",
+                    "bodyPreview": (
+                        "The monthly admin report is ready and can be "
+                        "reviewed from the service portal."
+                    ),
+                    "from": {"emailAddress": {"address": "notifications@example.com"}},
+                    "parentFolderId": "inbox-folder-id",
+                }
+            ]
+        }
+
+    async def fake_provider(payload, config):
+        return classifier_module._ModelSignal(
+            category="notifications_system",
+            confidence=0.92,
+            reasons=("Azure model classified this as a system notification.",),
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_token)
+    monkeypatch.setattr(main, "_graph_get", fake_graph_get)
+    monkeypatch.setattr(classifier_module, "_call_azure_classifier", fake_provider)
+    monkeypatch.setattr(main, "_persist_dry_run_classification", lambda **kwargs: None)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/classify-dryrun",
+        params={"account": "daniel@danielyoung.io", "limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider"]["selected"] == "azure_openai"
+    assert payload["provider"]["configured"] is True
+    assert payload["provider"]["consulted"] is True
+    recommendation = payload["results"][0]["recommendation"]
+    assert recommendation["provider_consulted"] is True
+    assert recommendation["provider"] == "azure_openai"
+    assert recommendation["recommended_folder"] == "40 - Notifications"
+    assert recommendation["forced_review"] is False
+
+
 def test_classify_inbox_dryrun_log_returns_persisted_rows(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     monkeypatch.setattr(main, "_list_user_accounts", lambda email: [_account_row(email)])
