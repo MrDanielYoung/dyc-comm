@@ -30,24 +30,26 @@ jobs:
       - name: Lint (ruff)
         run: ruff check apps tests
 
-      - name: Format diff (debug)
+      - name: Format diff (debug — issue annotation)
         if: always()
         run: |
           ruff format --diff apps tests > /tmp/ruff-format.diff 2>&1 || true
-          {
-            echo '## ruff format diff'
-            echo '```diff'
-            cat /tmp/ruff-format.diff || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload ruff format diff
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ruff-format-diff
-          path: /tmp/ruff-format.diff
-          if-no-files-found: ignore
+          # Encode the diff into a single-line annotation we can read via
+          # the GitHub annotations API (which goes through api.github.com,
+          # not blob storage).
+          if [ -s /tmp/ruff-format.diff ]; then
+            python3 - <<'PY'
+          import os
+          with open('/tmp/ruff-format.diff', 'rb') as f:
+              raw = f.read()
+          # Truncate to keep the annotation short enough to read back.
+          text = raw.decode('utf-8', 'replace')[:9000]
+          # Squash newlines into a single line. Annotations don't allow %0A
+          # escaping when using newer formatters, but ::error supports them.
+          escaped = text.replace('%', '%25').replace('\r', '').replace('\n', '%0A')
+          print(f"::error title=ruff format diff::{escaped}")
+          PY
+          fi
 
       - name: Format check (ruff format)
         run: ruff format --check apps tests
