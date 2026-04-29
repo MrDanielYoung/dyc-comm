@@ -126,9 +126,11 @@ The classifier accepts an already-redacted payload. Callers must:
   a routing decision.
 
 The classifier itself does not log the content of messages it sees.
-When a real Azure OpenAI call is wired in, the request payload will be
-sent over TLS to the Azure-region endpoint configured by the operator,
-and Azure's enterprise-data-protection terms will apply.
+When Azure OpenAI is configured, the request payload is sent over TLS to
+the Azure-region endpoint configured by the operator, and Azure's
+enterprise-data-protection terms apply. The provider returns only a
+category, confidence, and reasons; local safety rules still decide
+whether to force `10 - Review`.
 
 ## 5. BIOTRONIK Disclosure And Audit Posture
 

@@ -14,6 +14,8 @@ rely on. The contract:
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from apps.api.app import classifier as classifier_module
@@ -75,6 +77,24 @@ def test_high_confidence_newsletter_routes_to_news():
         )
     )
     assert decision.recommended_folder == "20 - News"
+    assert decision.forced_review is False
+    assert decision.confidence_band == "high"
+
+
+def test_high_confidence_it_report_routes_to_it_reports():
+    decision = classify(
+        ClassificationInput(
+            subject="[MrDanielYoung/dyc-comm] PR run failed: CI",
+            body=(
+                "The repository workflow run failed for the latest pull "
+                "request. Review the CI logs and deployment status."
+            ),
+            sender="notifications@github.com",
+            rule_category="it_reports",
+            rule_confidence=0.95,
+        )
+    )
+    assert decision.recommended_folder == "90 - IT Reports"
     assert decision.forced_review is False
     assert decision.confidence_band == "high"
 
@@ -240,6 +260,90 @@ def test_classifier_never_consults_provider_in_deterministic_path():
     )
     assert decision.provider_consulted is False
     assert decision.provider == "azure_openai"
+
+
+def test_provider_signal_routes_clear_notification(monkeypatch):
+    cfg = AzureAIProviderConfig(
+        provider="azure_openai",
+        endpoint="https://example.openai.azure.com",
+        deployment="gpt-5-mini",
+        api_version="2024-08-01-preview",
+        has_api_key=True,
+    )
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+
+    async def fake_provider(payload, config):
+        return classifier_module._ModelSignal(
+            category="notifications_system",
+            confidence=0.91,
+            reasons=("Azure model identified a routine system notification.",),
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(classifier_module, "_call_azure_classifier", fake_provider)
+
+    decision = asyncio.run(
+        classifier_module.classify_with_provider(
+            ClassificationInput(
+                subject="Your export is ready",
+                body=(
+                    "The requested data export has finished processing and "
+                    "is available for download from the admin console."
+                ),
+                sender="notifications@example.com",
+            ),
+            provider_config=cfg,
+        )
+    )
+
+    assert decision.provider_consulted is True
+    assert decision.provider == "azure_openai"
+    assert decision.category == "notifications_system"
+    assert decision.recommended_folder == "40 - Notifications"
+    assert decision.forced_review is False
+
+
+def test_provider_signal_cannot_bypass_sensitive_review(monkeypatch):
+    cfg = AzureAIProviderConfig(
+        provider="azure_openai",
+        endpoint="https://example.openai.azure.com",
+        deployment="gpt-5-mini",
+        api_version="2024-08-01-preview",
+        has_api_key=True,
+    )
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+
+    async def fake_provider(payload, config):
+        return classifier_module._ModelSignal(
+            category="notifications_system",
+            confidence=0.99,
+            reasons=("Azure model thought this was a notification.",),
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(classifier_module, "_call_azure_classifier", fake_provider)
+
+    decision = asyncio.run(
+        classifier_module.classify_with_provider(
+            ClassificationInput(
+                subject="Patient device notification",
+                body=(
+                    "This notification mentions a patient pacemaker implant "
+                    "follow-up and therefore must stay under human review."
+                ),
+                sender="notifications@example.com",
+            ),
+            provider_config=cfg,
+        )
+    )
+
+    assert decision.provider_consulted is True
+    assert decision.category == "notifications_system"
+    assert decision.recommended_folder == REVIEW_FOLDER
+    assert decision.forced_review is True
+    assert "sensitive_content" in decision.safety_flags
 
 
 # ---------------------------------------------------------------------------
