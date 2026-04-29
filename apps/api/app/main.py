@@ -736,9 +736,7 @@ def _ensure_account_tables() -> None:
                 "ADD COLUMN IF NOT EXISTS executed_provider_message_id TEXT",
                 "ADD COLUMN IF NOT EXISTS action_error TEXT",
             ):
-                cursor.execute(
-                    f"ALTER TABLE inbox_dry_run_classification {column_ddl}"
-                )
+                cursor.execute(f"ALTER TABLE inbox_dry_run_classification {column_ddl}")
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_inbox_dry_run_account_received
