@@ -32,6 +32,6 @@ jobs:
             --max-time 540 \
             -X POST \
             -H "Authorization: Bearer ${AUTOMATION_RUN_TOKEN}" \
-            "https://api.comm.danielyoung.io/automation/run?limit=10")"
+            "https://api.comm.danielyoung.io/automation/run?limit=500&move_limit=100")"
 
           echo "${response}"
