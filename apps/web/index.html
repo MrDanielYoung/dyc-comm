@@ -1838,13 +1838,13 @@
                         data-testid="sorting-automation-button"
                       >Run safe automation</button>
                       <label class="metric-reason" for="sortingLimit">
-                        Limit
+                        Scan
                         <input
                           id="sortingLimit"
                           type="number"
                           min="1"
-                          max="100"
-                          value="25"
+                          max="500"
+                          value="100"
                           data-testid="sorting-limit"
                           style="width: 64px; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;"
                         />
@@ -3142,20 +3142,24 @@
           applySortingReadinessUI();
           return;
         }
-        const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 10;
-        const limit = Math.min(Math.max(limitRaw, 1), 25);
+        const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 100;
+        const limit = Math.min(Math.max(limitRaw, 1), 500);
+        const moveLimit = Math.min(limit, 100);
         const confirmed = window.confirm(
-          `Run safe automation for ${account}? High-confidence machine-sortable messages may be moved. Review, legal, sensitive, low-confidence, or unclear messages will be skipped and audited.`
+          `Run safe automation for ${account}? Up to ${moveLimit} high-confidence machine-sortable messages may be moved after scanning ${limit}. Review, legal, sensitive, low-confidence, or unclear messages will be skipped and audited.`
         );
         if (!confirmed) return;
 
         sortingAutomationButton.disabled = true;
         if (sortingRunButton) sortingRunButton.disabled = true;
         if (sortingRefreshButton) sortingRefreshButton.disabled = true;
-        setSortingStatus(`Running safe automation for ${account} (limit ${limit})…`);
+        setSortingStatus(
+          `Running safe automation for ${account} (scan ${limit}, move cap ${moveLimit})…`
+        );
         const path =
           `/mail/inbox/automove?account=${encodeURIComponent(account)}` +
-          `&limit=${encodeURIComponent(String(limit))}`;
+          `&limit=${encodeURIComponent(String(limit))}` +
+          `&move_limit=${encodeURIComponent(String(moveLimit))}`;
         try {
           const response = await fetch(`${API_BASE}${path}`, {
             method: "POST",

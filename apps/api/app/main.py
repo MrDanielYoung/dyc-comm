@@ -391,6 +391,24 @@ async def _graph_get(
     return response.json()
 
 
+async def _graph_get_url(access_token: str, url: str) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    if not url.startswith("https://graph.microsoft.com/v1.0/"):
+        raise HTTPException(status_code=502, detail="Unexpected Microsoft Graph page URL.")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(url, headers=headers)
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Microsoft Graph request failed",
+                "status_code": response.status_code,
+                "body": response.text,
+            },
+        )
+    return response.json()
+
+
 async def _graph_post(access_token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -2340,6 +2358,38 @@ async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, 
     return payload.get("value", [])
 
 
+async def _list_inbox_messages_paginated(
+    access_token: str, scan_limit: int
+) -> list[dict[str, Any]]:
+    """Fetch a bounded page-walk of recent Inbox messages from Microsoft Graph."""
+    messages: list[dict[str, Any]] = []
+    remaining = scan_limit
+    page_size = min(50, remaining)
+    payload = await _graph_get(
+        access_token,
+        "/me/mailFolders/inbox/messages",
+        params={
+            "$top": str(page_size),
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview",
+        },
+    )
+
+    while True:
+        page_values = payload.get("value", [])
+        messages.extend(page_values[:remaining])
+        remaining = scan_limit - len(messages)
+        if remaining <= 0:
+            break
+
+        next_link = payload.get("@odata.nextLink")
+        if not next_link:
+            break
+        payload = await _graph_get_url(access_token, str(next_link))
+
+    return messages
+
+
 def _coerce_received_at(value: Any) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
@@ -2755,6 +2805,10 @@ def classify_inbox_dryrun_log(
 
 INBOX_MOVE_MAX_BATCH = 25
 INBOX_AUTOMATION_MAX_BATCH = 25
+INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT = 100
+INBOX_AUTOMATION_MAX_SCAN_LIMIT = 500
+INBOX_AUTOMATION_DEFAULT_MOVE_LIMIT = 25
+INBOX_AUTOMATION_MAX_MOVE_LIMIT = 100
 INBOX_AUTOMATION_DEFAULT_CONFIDENCE = 0.90
 AUTOMATION_ALLOWED_CATEGORIES = {
     "it_reports",
@@ -3260,7 +3314,18 @@ def _automation_safety_skip_reason(
 @app.post("/mail/inbox/automove")
 async def automove_inbox_messages(
     account: str = Query(..., description="Connected account email."),
-    limit: int = Query(default=10, ge=1, le=INBOX_AUTOMATION_MAX_BATCH),
+    limit: int = Query(
+        default=INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT,
+        ge=1,
+        le=INBOX_AUTOMATION_MAX_SCAN_LIMIT,
+        description="Maximum recent Inbox messages to scan.",
+    ),
+    move_limit: int = Query(
+        default=INBOX_AUTOMATION_DEFAULT_MOVE_LIMIT,
+        ge=1,
+        le=INBOX_AUTOMATION_MAX_MOVE_LIMIT,
+        description="Maximum messages this run may move.",
+    ),
     min_confidence: float = Query(
         default=INBOX_AUTOMATION_DEFAULT_CONFIDENCE,
         ge=0.90,
@@ -3282,7 +3347,8 @@ async def automove_inbox_messages(
     return await _automove_for_account(
         requested_by_email=user_email,
         target=target,
-        limit=limit,
+        scan_limit=limit,
+        move_limit=move_limit,
         min_confidence=min_confidence,
     )
 
@@ -3290,7 +3356,8 @@ async def automove_inbox_messages(
 async def _automove_for_account(
     requested_by_email: str,
     target: dict[str, Any],
-    limit: int,
+    scan_limit: int,
+    move_limit: int,
     min_confidence: float,
 ) -> dict[str, Any]:
     health = _automation_health_for_account(target)
@@ -3306,7 +3373,7 @@ async def _automove_for_account(
     access_token, account_record = await _graph_access_token_for_email(target["email"])
     account_id = account_record["account_id"]
     account_email = account_record["email"]
-    messages = await _list_inbox_messages(access_token, limit=limit)
+    messages = await _list_inbox_messages_paginated(access_token, scan_limit=scan_limit)
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
 
     results: list[dict[str, Any]] = []
@@ -3365,6 +3432,34 @@ async def _automove_for_account(
                     "subject": message.get("subject") or "",
                     "status": "skipped",
                     "error": f"automation_{skip_reason}",
+                    "recommended_folder": decision.recommended_folder,
+                    "confidence": decision.confidence,
+                    "moved": False,
+                }
+            )
+            continue
+
+        if sum(1 for r in results if r["status"] == "succeeded") >= move_limit:
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=requested_by_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=message.get("parentFolderId"),
+                destination_folder_id=None,
+                destination_folder_name=decision.recommended_folder,
+                dry_run_classification_id=dry_run_row["id"] if dry_run_row else None,
+                forced_review=False,
+                status="skipped",
+                error="automation_move_limit_reached",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "subject": message.get("subject") or "",
+                    "status": "skipped",
+                    "error": "automation_move_limit_reached",
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
@@ -3481,7 +3576,9 @@ async def _automove_for_account(
             "email": account_email,
             "display_name": account_record["display_name"],
         },
-        "limit": limit,
+        "limit": scan_limit,
+        "scan_limit": scan_limit,
+        "move_limit": move_limit,
         "min_confidence": min_confidence,
         "fetched": len(messages),
         "moved": sum(1 for r in results if r["status"] == "succeeded"),
@@ -3511,7 +3608,16 @@ def _require_automation_run_token(request: Request) -> None:
 @app.post("/automation/run")
 async def run_scheduled_automation(
     request: Request,
-    limit: int = Query(default=10, ge=1, le=INBOX_AUTOMATION_MAX_BATCH),
+    limit: int = Query(
+        default=INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT,
+        ge=1,
+        le=INBOX_AUTOMATION_MAX_SCAN_LIMIT,
+    ),
+    move_limit: int = Query(
+        default=INBOX_AUTOMATION_DEFAULT_MOVE_LIMIT,
+        ge=1,
+        le=INBOX_AUTOMATION_MAX_MOVE_LIMIT,
+    ),
     min_confidence: float = Query(
         default=INBOX_AUTOMATION_DEFAULT_CONFIDENCE,
         ge=0.90,
@@ -3546,7 +3652,8 @@ async def run_scheduled_automation(
             result = await _automove_for_account(
                 requested_by_email="automation@scheduler",
                 target=account_row,
-                limit=limit,
+                scan_limit=limit,
+                move_limit=move_limit,
                 min_confidence=min_confidence,
             )
             result["status"] = "completed"

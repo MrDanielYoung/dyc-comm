@@ -570,7 +570,7 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
         },
     )
 
-    async def fake_list_messages(token, limit):
+    async def fake_list_messages(token, scan_limit):
         return [
             {
                 "id": "msg-1",
@@ -581,7 +581,7 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(main, "_list_inbox_messages", fake_list_messages)
+    monkeypatch.setattr(main, "_list_inbox_messages_paginated", fake_list_messages)
 
     async def fake_classify(ci, provider_config=None):
         return classifier_module.ClassificationDecision(
@@ -642,6 +642,112 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     assert persisted[0]["destination_folder_name"] == "90 - IT Reports"
 
 
+def test_automove_scans_deeper_than_move_limit(monkeypatch):
+    _install_account_session(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+
+    async def fake_list_messages(token, scan_limit):
+        assert scan_limit == 3
+        return [
+            {
+                "id": "msg-review",
+                "subject": "Contract terms",
+                "bodyPreview": "Please review this agreement",
+                "parentFolderId": "inbox-folder-id",
+                "from": {"emailAddress": {"address": "legal@example.com"}},
+            },
+            {
+                "id": "msg-move-1",
+                "subject": "CI run failed",
+                "bodyPreview": "Repository build failed",
+                "parentFolderId": "inbox-folder-id",
+                "from": {"emailAddress": {"address": "notifications@github.com"}},
+            },
+            {
+                "id": "msg-move-2",
+                "subject": "Another CI run failed",
+                "bodyPreview": "Repository build failed",
+                "parentFolderId": "inbox-folder-id",
+                "from": {"emailAddress": {"address": "notifications@github.com"}},
+            },
+        ]
+
+    monkeypatch.setattr(main, "_list_inbox_messages_paginated", fake_list_messages)
+
+    async def fake_classify(ci, provider_config=None):
+        if ci.subject == "Contract terms":
+            return classifier_module.ClassificationDecision(
+                recommended_folder="10 - Review",
+                category="legal_contracts",
+                confidence=0.99,
+                confidence_band="high",
+                reasons=["legal"],
+                safety_flags=["legal_or_contractual"],
+                forced_review=True,
+                provider_consulted=True,
+                provider="azure_openai",
+            )
+        return classifier_module.ClassificationDecision(
+            recommended_folder="90 - IT Reports",
+            category="it_reports",
+            confidence=0.99,
+            confidence_band="high",
+            reasons=["repository notification"],
+            safety_flags=[],
+            forced_review=False,
+            provider_consulted=True,
+            provider="azure_openai",
+        )
+
+    monkeypatch.setattr(classifier_module, "classify_with_provider", fake_classify)
+    monkeypatch.setattr(main, "_persist_dry_run_classification", lambda **kwargs: None)
+    monkeypatch.setattr(
+        main,
+        "_load_dry_run_row",
+        lambda account_id, message_id: {
+            "id": f"dryrun-{message_id}",
+            "current_folder": "inbox-folder-id",
+        },
+    )
+    monkeypatch.setattr(main, "_existing_succeeded_move", lambda account_id, msg_id: None)
+    _install_inventory(monkeypatch, {"90 - IT Reports": "it-folder-id"})
+
+    graph_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_post(token, path, payload):
+        graph_calls.append((token, path, payload))
+        return {"id": "moved-msg"}
+
+    monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+    monkeypatch.setattr(main, "_persist_move_action", lambda **kwargs: "action-row-id")
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/automove",
+        params={"account": "daniel@danielyoung.io", "limit": 3, "move_limit": 1},
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fetched"] == 3
+    assert payload["moved"] == 1
+    assert payload["skipped"] == 2
+    assert graph_calls == [
+        ("graph-token", "/me/messages/msg-move-1/move", {"destinationId": "it-folder-id"})
+    ]
+    assert payload["results"][2]["error"] == "automation_move_limit_reached"
+
+
 def test_automove_skips_forced_review_without_graph_call(monkeypatch):
     _install_account_session(monkeypatch)
     monkeypatch.setattr(
@@ -655,7 +761,7 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
         },
     )
 
-    async def fake_list_messages(token, limit):
+    async def fake_list_messages(token, scan_limit):
         return [
             {
                 "id": "msg-1",
@@ -666,7 +772,7 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(main, "_list_inbox_messages", fake_list_messages)
+    monkeypatch.setattr(main, "_list_inbox_messages_paginated", fake_list_messages)
 
     async def fake_classify(ci, provider_config=None):
         return classifier_module.ClassificationDecision(
@@ -780,9 +886,11 @@ def test_scheduled_automation_runs_yellow_and_skips_red(monkeypatch):
 
     monkeypatch.setattr(main, "_automation_health_for_account", fake_health)
 
-    async def fake_automove(requested_by_email, target, limit, min_confidence):
+    async def fake_automove(requested_by_email, target, scan_limit, move_limit, min_confidence):
         assert requested_by_email == "automation@scheduler"
         assert target["email"] == "yellow@example.com"
+        assert scan_limit == main.INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT
+        assert move_limit == main.INBOX_AUTOMATION_DEFAULT_MOVE_LIMIT
         return {
             "account": {"email": target["email"]},
             "moved": 2,
