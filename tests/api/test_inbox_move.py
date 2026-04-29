@@ -616,6 +616,13 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
         return {"id": "moved-msg-1"}
 
     monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+    category_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_patch(token, path, payload):
+        category_calls.append((token, path, payload))
+        return {}
+
+    monkeypatch.setattr(main, "_graph_patch", fake_graph_patch)
     persisted: list[dict] = []
     monkeypatch.setattr(
         main,
@@ -637,6 +644,13 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     assert payload["skipped"] == 0
     assert graph_calls == [
         ("graph-token", "/me/messages/msg-1/move", {"destinationId": "it-folder-id"})
+    ]
+    assert category_calls == [
+        (
+            "graph-token",
+            "/me/messages/msg-1",
+            {"categories": ["DYC - Automation Moved", "DYC - FYI"]},
+        )
     ]
     assert persisted[0]["status"] == "succeeded"
     assert persisted[0]["destination_folder_name"] == "90 - IT Reports"
@@ -728,6 +742,13 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
         return {"id": "moved-msg"}
 
     monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+    category_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_patch(token, path, payload):
+        category_calls.append((token, path, payload))
+        return {}
+
+    monkeypatch.setattr(main, "_graph_patch", fake_graph_patch)
     monkeypatch.setattr(main, "_persist_move_action", lambda **kwargs: "action-row-id")
 
     client = TestClient(main.app)
@@ -744,6 +765,28 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
     assert payload["skipped"] == 2
     assert graph_calls == [
         ("graph-token", "/me/messages/msg-move-1/move", {"destinationId": "it-folder-id"})
+    ]
+    assert category_calls == [
+        (
+            "graph-token",
+            "/me/messages/msg-review",
+            {
+                "categories": [
+                    "DYC - Needs Review",
+                    "DYC - Legal Contract",
+                ]
+            },
+        ),
+        (
+            "graph-token",
+            "/me/messages/msg-move-1",
+            {"categories": ["DYC - Automation Moved", "DYC - FYI"]},
+        ),
+        (
+            "graph-token",
+            "/me/messages/msg-move-2",
+            {"categories": ["DYC - FYI"]},
+        ),
     ]
     assert payload["results"][2]["error"] == "automation_move_limit_reached"
 
@@ -802,6 +845,13 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
         raise AssertionError("forced-review automation must not call Graph move")
 
     monkeypatch.setattr(main, "_graph_post", fail_graph_post)
+    category_calls: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_patch(token, path, payload):
+        category_calls.append((token, path, payload))
+        return {}
+
+    monkeypatch.setattr(main, "_graph_patch", fake_graph_patch)
     persisted: list[dict] = []
     monkeypatch.setattr(
         main,
@@ -821,6 +871,18 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
     assert payload["moved"] == 0
     assert payload["skipped"] == 1
     assert payload["results"][0]["error"] == "automation_forced_review"
+    assert category_calls == [
+        (
+            "graph-token",
+            "/me/messages/msg-1",
+            {
+                "categories": [
+                    "DYC - Needs Review",
+                    "DYC - Legal Contract",
+                ]
+            },
+        )
+    ]
     assert persisted[0]["status"] == "skipped"
     assert persisted[0]["error"] == "automation_forced_review"
 
