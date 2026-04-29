@@ -33,12 +33,21 @@ jobs:
       - name: Format diff (debug)
         if: always()
         run: |
+          ruff format --diff apps tests > /tmp/ruff-format.diff 2>&1 || true
           {
             echo '## ruff format diff'
             echo '```diff'
-            ruff format --diff apps tests || true
+            cat /tmp/ruff-format.diff || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload ruff format diff
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-format-diff
+          path: /tmp/ruff-format.diff
+          if-no-files-found: ignore
 
       - name: Format check (ruff format)
         run: ruff format --check apps tests
