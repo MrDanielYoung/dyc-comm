@@ -137,6 +137,21 @@ def _allowed_account_emails() -> set[str]:
     return {_normalize_id(v) for v in _split_csv_env("ALLOWED_ACCOUNT_EMAILS") if v}
 
 
+def _visible_account_emails_for_session(user_email: str) -> list[str]:
+    """Return allow-listed mailbox emails visible to this signed-in account.
+
+    ``dyc-comm`` is currently a private, single-user console. Daniel may sign
+    in through any allow-listed Microsoft mailbox, but the portal should still
+    show the full connected mailbox set. Without this, connecting DHW changes
+    the session email to DHW and hides the DYC mailbox.
+    """
+    allowed = _allowed_account_emails()
+    normalized_user = _normalize_id(user_email)
+    if not allowed or normalized_user not in allowed:
+        return []
+    return sorted(allowed)
+
+
 def _decode_id_token_claims(id_token: str | None) -> dict[str, Any]:
     """Decode JWT payload without signature verification.
 
@@ -1546,6 +1561,7 @@ def _list_user_accounts(user_email: str) -> list[dict[str, Any]]:
 
     psycopg = _psycopg()
     _ensure_account_tables()
+    visible_emails = _visible_account_emails_for_session(user_email)
 
     try:
         with _get_connection() as connection:
@@ -1565,9 +1581,10 @@ def _list_user_accounts(user_email: str) -> list[dict[str, Any]]:
                     FROM connected_account ca
                     JOIN app_user au ON au.id = ca.user_id
                     WHERE au.email = %s
+                       OR lower(ca.email_address) = ANY(%s)
                     ORDER BY ca.updated_at DESC
                     """,
-                    (user_email,),
+                    (user_email, visible_emails),
                 )
                 rows = cursor.fetchall()
     except psycopg.Error as exc:
