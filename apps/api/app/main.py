@@ -252,15 +252,24 @@ def _token_tenant_segment() -> str:
     return _require_env("MICROSOFT_ENTRA_TENANT_ID")
 
 
+def _login_hint_targets_home_tenant(login_hint: str | None) -> bool:
+    return _normalize_id(login_hint).endswith("@danielyoung.io")
+
+
 def _authorize_tenant_segment(login_hint: str | None = None) -> str:
     """Pick the tenant segment for the /authorize URL.
 
-    Unhinted first sign-in uses the configured home tenant id so Microsoft
-    can render the tenant-branded page. Hinted reconnect/connect flows use
+    The primary DYC account uses the configured home tenant id so Microsoft
+    can render the tenant-branded page with the known account selected.
+    Hinted reconnect/connect flows for external accounts use
     ``/organizations`` when external tenants are allow-listed, so those
     specific cross-tenant accounts can still complete sign-in.
     """
-    if login_hint and _multi_tenant_authorize_enabled():
+    if (
+        login_hint
+        and not _login_hint_targets_home_tenant(login_hint)
+        and _multi_tenant_authorize_enabled()
+    ):
         return "organizations"
     return _require_env("MICROSOFT_ENTRA_TENANT_ID")
 

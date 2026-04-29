@@ -1971,6 +1971,8 @@
 
       const API_BASE = inferApiBase();
       const SIGN_IN_URL = `${API_BASE}/auth/microsoft/start`;
+      const PRIMARY_LOGIN_HINT = "daniel@danielyoung.io";
+      const PRIMARY_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(PRIMARY_LOGIN_HINT)}`;
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
 
@@ -2102,8 +2104,8 @@
       }
 
       apiBaseText.textContent = API_BASE;
-      gateConnectLink.href = SIGN_IN_URL;
-      headerSignInLink.href = SIGN_IN_URL;
+      gateConnectLink.href = PRIMARY_SIGN_IN_URL;
+      headerSignInLink.href = PRIMARY_SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
       accountNavConnectLink.href = DHW_SIGN_IN_URL;
@@ -3159,7 +3161,7 @@
           suppressRedirect: suppressInitialRedirect,
           payload,
           fetchError,
-          primarySignInUrl: SIGN_IN_URL,
+          primarySignInUrl: PRIMARY_SIGN_IN_URL,
           reauthSignInUrl: signInUrlForEmail,
         });
 
