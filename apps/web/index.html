@@ -825,6 +825,13 @@
         box-shadow: 0 4px 14px rgba(20, 22, 27, 0.03);
       }
 
+      .account-nav .tablist {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 6px;
+        box-shadow: none;
+      }
+
       .tab {
         appearance: none;
         min-height: 36px;
@@ -838,6 +845,11 @@
         font-size: 0.85rem;
         cursor: pointer;
         position: relative;
+      }
+
+      .account-nav .tab {
+        width: 100%;
+        text-align: left;
       }
 
       .tab[aria-selected="true"] {
@@ -1181,6 +1193,19 @@
         word-break: break-word;
       }
 
+      .account-nav-section {
+        display: grid;
+        gap: 8px;
+        padding-top: 2px;
+      }
+
+      .account-nav-section .button-link,
+      .account-nav-section .topbar-button {
+        width: 100%;
+        justify-content: center;
+        text-align: center;
+      }
+
       .tenant-warning {
         margin: 0;
         padding: 10px 12px;
@@ -1259,6 +1284,20 @@
 
         .account-nav-connect {
           padding: 12px;
+        }
+
+        .account-nav .tablist {
+          flex-direction: row;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          overflow-y: hidden;
+          padding: 6px;
+          -webkit-overflow-scrolling: touch;
+        }
+
+        .account-nav .tab {
+          flex: 0 0 auto;
+          width: auto;
         }
       }
 
@@ -1405,6 +1444,57 @@
                 role="tablist"
                 aria-orientation="vertical"
               ></div>
+              <div class="account-nav-section" data-testid="left-service-nav">
+                <p class="account-nav-heading">Console</p>
+                <div class="tablist" role="tablist" aria-label="Console sections">
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
+                    id="tab-dashboard"
+                    data-tab="dashboard"
+                    aria-selected="true"
+                    aria-controls="panel-dashboard"
+                  >Dashboard</button>
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
+                    id="tab-sorting"
+                    data-tab="sorting"
+                    aria-selected="false"
+                    aria-controls="panel-sorting"
+                    data-testid="tab-sorting"
+                  >Inbox Sorting</button>
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
+                    id="tab-activity"
+                    data-tab="activity"
+                    aria-selected="false"
+                    aria-controls="panel-activity"
+                  >Audit Log</button>
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
+                    id="tab-alerts"
+                    data-tab="alerts"
+                    aria-selected="false"
+                    aria-controls="panel-alerts"
+                  >Alerts <span class="tab-badge" id="alertsBadge" hidden>0</span></button>
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
+                    id="tab-api"
+                    data-tab="api"
+                    aria-selected="false"
+                    aria-controls="panel-api"
+                  >API / Diagnostics</button>
+                </div>
+              </div>
               <div
                 class="account-nav-connect"
                 id="accountNavConnect"
@@ -1435,6 +1525,21 @@
                     rel="noopener"
                   >auth troubleshooting</a>.
                 </p>
+              </div>
+              <div class="account-nav-section" data-testid="left-account-actions">
+                <p class="account-nav-heading">Session</p>
+                <a
+                  class="button-link secondary"
+                  id="railConnectAccountLink"
+                  data-testid="rail-connect-account"
+                  href="#"
+                >Connect another account</a>
+                <button
+                  class="secondary topbar-button"
+                  id="railSignOutButton"
+                  data-testid="rail-sign-out"
+                  type="button"
+                >Sign out</button>
               </div>
             </aside>
             <div class="app-main">
@@ -1483,55 +1588,6 @@
                 </div>
               </aside>
             </section>
-
-            <div class="tablist" role="tablist" aria-label="Console sections">
-              <button
-                class="tab"
-                role="tab"
-                type="button"
-                id="tab-dashboard"
-                data-tab="dashboard"
-                aria-selected="true"
-                aria-controls="panel-dashboard"
-              >Dashboard</button>
-              <button
-                class="tab"
-                role="tab"
-                type="button"
-                id="tab-sorting"
-                data-tab="sorting"
-                aria-selected="false"
-                aria-controls="panel-sorting"
-                data-testid="tab-sorting"
-              >Inbox Sorting</button>
-              <button
-                class="tab"
-                role="tab"
-                type="button"
-                id="tab-activity"
-                data-tab="activity"
-                aria-selected="false"
-                aria-controls="panel-activity"
-              >Activity Log</button>
-              <button
-                class="tab"
-                role="tab"
-                type="button"
-                id="tab-alerts"
-                data-tab="alerts"
-                aria-selected="false"
-                aria-controls="panel-alerts"
-              >Alerts <span class="tab-badge" id="alertsBadge" hidden>0</span></button>
-              <button
-                class="tab"
-                role="tab"
-                type="button"
-                id="tab-api"
-                data-tab="api"
-                aria-selected="false"
-                aria-controls="panel-api"
-              >API / Diagnostics</button>
-            </div>
 
             <div class="tabpanels">
               <section
@@ -1835,7 +1891,7 @@
                 <div class="shell">
                   <section class="panel section-panel" data-testid="activity-panel">
                     <div class="panel-account-row">
-                      <h2 class="section-title">Activity log</h2>
+                      <h2 class="section-title">Audit log</h2>
                       <span
                         class="selected-account-label"
                         id="activitySelectedAccount"
@@ -1844,8 +1900,9 @@
                       ></span>
                     </div>
                     <p class="empty-state">
-                      Recent folder bootstrap, inventory-sync, and approved message
-                      move events for the selected account.
+                      Verbose operational trail for the selected account:
+                      folder bootstrap, inventory sync, approved message moves,
+                      and automation actions as they are enabled.
                     </p>
                     <div class="action-row">
                       <button class="secondary" id="activityRefresh" type="button">
@@ -1855,7 +1912,7 @@
                     <div class="activity-list" id="activityList">
                       <p class="empty-state">Loading activity…</p>
                     </div>
-                    <h2 class="section-title">Message movement</h2>
+                    <h2 class="section-title">Approved message movement</h2>
                     <p class="metric-reason" id="messageMovementReason">
                       No approved moves recorded yet.
                     </p>
@@ -2027,6 +2084,8 @@
       const dashboardAccountList = document.getElementById("dashboardAccountList");
       const connectDhwLink = document.getElementById("connectDhwLink");
       const connectGenericLink = document.getElementById("connectGenericLink");
+      const railConnectAccountLink = document.getElementById("railConnectAccountLink");
+      const railSignOutButton = document.getElementById("railSignOutButton");
       const activityList = document.getElementById("activityList");
       const activityRefresh = document.getElementById("activityRefresh");
       const messageMovementReason = document.getElementById("messageMovementReason");
@@ -2122,17 +2181,24 @@
       connectDhwLink.href = DHW_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
       accountNavConnectLink.href = DHW_SIGN_IN_URL;
+      railConnectAccountLink.href = SIGN_IN_URL;
 
       function setHeaderUnauthenticated() {
         headerAccount.hidden = true;
         headerAccountValue.textContent = "—";
         headerSignOutButton.hidden = true;
         headerSignInLink.hidden = false;
+        if (railSignOutButton) {
+          railSignOutButton.hidden = true;
+        }
       }
 
       function setHeaderAuthenticated(account) {
         headerSignInLink.hidden = true;
         headerSignOutButton.hidden = false;
+        if (railSignOutButton) {
+          railSignOutButton.hidden = false;
+        }
         const label = (account && (account.email || account.display_name)) || "Signed in";
         headerAccountValue.textContent = label;
         headerAccount.hidden = false;
@@ -3326,6 +3392,9 @@
         evaluateSession({ initial: false });
       });
       headerSignOutButton.addEventListener("click", signOut);
+      if (railSignOutButton) {
+        railSignOutButton.addEventListener("click", signOut);
+      }
       if (activityRefresh) {
         activityRefresh.addEventListener("click", () => loadActivity());
       }

@@ -145,8 +145,18 @@ def test_account_nav_supports_multi_account_selection():
     assert "loadSortingLog().catch" in html
 
 
+def test_left_rail_hosts_console_and_session_controls():
+    html = _read_html()
+    assert 'data-testid="left-service-nav"' in html
+    assert "Audit Log" in html
+    assert 'data-testid="rail-connect-account"' in html
+    assert 'data-testid="rail-sign-out"' in html
+    assert "railSignOutButton.addEventListener" in html
+
+
 def test_activity_log_renders_message_move_events():
     html = _read_html()
+    assert "Verbose operational trail" in html
     assert 'id="messageMovementList"' in html
     assert "message_movement" in html
     assert "Moved to" in html
