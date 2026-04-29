@@ -2540,9 +2540,7 @@ def classify_inbox_dryrun_log(
 INBOX_MOVE_MAX_BATCH = 25
 
 
-def _resolve_target_folder_id(
-    account_id: str, recommended_folder: str
-) -> tuple[str | None, str]:
+def _resolve_target_folder_id(account_id: str, recommended_folder: str) -> tuple[str | None, str]:
     """Resolve a folder name to its provider folder id from the persisted inventory.
 
     Returns ``(provider_folder_id_or_None, canonical_name)``. If the folder
@@ -2562,9 +2560,7 @@ def _resolve_target_folder_id(
     return None, target_name
 
 
-def _load_dry_run_row(
-    account_id: str, provider_message_id: str
-) -> dict[str, Any] | None:
+def _load_dry_run_row(account_id: str, provider_message_id: str) -> dict[str, Any] | None:
     if not _database_url():
         return None
 
@@ -2612,9 +2608,7 @@ def _load_dry_run_row(
     }
 
 
-def _existing_succeeded_move(
-    account_id: str, provider_message_id: str
-) -> dict[str, Any] | None:
+def _existing_succeeded_move(account_id: str, provider_message_id: str) -> dict[str, Any] | None:
     if not _database_url():
         return None
 
@@ -2851,10 +2845,7 @@ async def move_inbox_messages(
     if len(raw_ids) > INBOX_MOVE_MAX_BATCH:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Too many message ids in one request "
-                f"(max {INBOX_MOVE_MAX_BATCH})."
-            ),
+            detail=f"Too many message ids in one request (max {INBOX_MOVE_MAX_BATCH}).",
         )
 
     provider_message_ids: list[str] = []
@@ -2925,9 +2916,7 @@ async def move_inbox_messages(
         else:
             target_name = recommended
 
-        destination_folder_id, resolved_name = _resolve_target_folder_id(
-            account_id, target_name
-        )
+        destination_folder_id, resolved_name = _resolve_target_folder_id(account_id, target_name)
         if not destination_folder_id:
             _persist_move_action(
                 account_id=account_id,
@@ -2955,16 +2944,10 @@ async def move_inbox_messages(
             continue
 
         try:
-            await _graph_move_message(
-                access_token, provider_message_id, destination_folder_id
-            )
+            await _graph_move_message(access_token, provider_message_id, destination_folder_id)
         except HTTPException as exc:
             detail = exc.detail
-            error_message = (
-                detail.get("message")
-                if isinstance(detail, dict)
-                else str(detail)
-            )
+            error_message = detail.get("message") if isinstance(detail, dict) else str(detail)
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
