@@ -3,6 +3,8 @@
 Numbered, append-only PostgreSQL migrations for the DYC Communications Platform.
 
 - `0001_initial.sql` — initial schema generated from `schema.md` (v1).
+- `0002_inbox_dry_run_classification.sql` — dry-run inbox classification log.
+- `0003_inbox_dry_run_move_execution.sql` — execution metadata for human-approved moves of a dry-run row.
 
 Apply manually for now:
 
