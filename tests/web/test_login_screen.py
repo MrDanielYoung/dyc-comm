@@ -83,15 +83,11 @@ def _extract_decide_session_action(html: str) -> str:
 def _run_node(js: str) -> dict:
     if shutil.which("node") is None:  # pragma: no cover - depends on CI image
         pytest.skip("node runtime not available")
-    result = subprocess.run(
-        ["node", "-e", js],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    result = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
     if result.returncode != 0:
         raise AssertionError(
-            f"node failed (rc={result.returncode}):\nSTDOUT:\n{result.stdout}\n"
+            f"node failed (rc={result.returncode}):\n"
+            f"STDOUT:\n{result.stdout}\n"
             f"STDERR:\n{result.stderr}"
         )
     return json.loads(result.stdout.strip().splitlines()[-1])
@@ -291,9 +287,8 @@ def test_auth_error_branch_sets_suppress_flag():
 
 def test_signout_sets_suppress_flag():
     html = _read_html()
-    signout_block = html.split("async function signOut()", 1)[1].split(
-        "async function safeCallApi", 1
-    )[0]
+    after_signout = html.split("async function signOut()", 1)[1]
+    signout_block = after_signout.split("async function safeCallApi", 1)[0]
     assert "suppressInitialRedirect = true" in signout_block
 
 
