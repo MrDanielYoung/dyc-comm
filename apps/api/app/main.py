@@ -1653,8 +1653,48 @@ def _empty_action_metrics() -> dict[str, Any]:
     }
 
 
+def _automation_health_for_account(account_row: dict[str, Any]) -> dict[str, Any]:
+    if not account_row.get("account_id"):
+        return {
+            "state": "red",
+            "label": "Not persisted",
+            "automation_ready": False,
+            "reasons": ["Account is session-only; reconnect so mailbox tokens are stored."],
+        }
+    if not account_row.get("has_refresh_token"):
+        return {
+            "state": "red",
+            "label": "Reconnect required",
+            "automation_ready": False,
+            "reasons": ["Mailbox access token is missing or expired."],
+        }
+
+    inventory = _summarize_folder_inventory(account_row["account_id"])
+    if (inventory.get("dyc_target_folders") or 0) == 0:
+        return {
+            "state": "red",
+            "label": "Folders missing",
+            "automation_ready": False,
+            "reasons": ["No DYC-managed target folders are inventoried; run Bootstrap."],
+        }
+    if not inventory.get("is_bootstrapped"):
+        return {
+            "state": "yellow",
+            "label": "Folders incomplete",
+            "automation_ready": False,
+            "reasons": ["One or more DYC-managed target folders are missing; run Bootstrap."],
+        }
+    return {
+        "state": "green",
+        "label": "Automation ready",
+        "automation_ready": True,
+        "reasons": ["Mailbox access and DYC-managed folders are ready."],
+    }
+
+
 def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
     folder_summary = _summarize_folder_inventory(account_row["account_id"])
+    automation_health = _automation_health_for_account(account_row)
     return {
         "account": {
             "account_id": account_row["account_id"],
@@ -1668,6 +1708,7 @@ def _account_dashboard_payload(account_row: dict[str, Any]) -> dict[str, Any]:
             "updated_at": account_row["updated_at"],
         },
         "folder_inventory": folder_summary,
+        "automation_health": automation_health,
         "email_volume": _empty_volume_metrics(),
         "action_activity": _empty_action_metrics(),
     }
@@ -1695,6 +1736,7 @@ def list_accounts(
                 "display_name": row["display_name"],
                 "status": row["status"],
                 "mailbox_access_ready": bool(row["has_refresh_token"]),
+                "automation_health": _automation_health_for_account(row),
                 "token_updated_at": row["token_updated_at"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -1712,6 +1754,12 @@ def list_accounts(
                 "display_name": linked_name or user_email,
                 "status": "session_only",
                 "mailbox_access_ready": False,
+                "automation_health": {
+                    "state": "red",
+                    "label": "Reconnect required",
+                    "automation_ready": False,
+                    "reasons": ["Account is session-only; reconnect so mailbox tokens are stored."],
+                },
                 "token_updated_at": None,
                 "created_at": None,
                 "updated_at": None,
@@ -1746,6 +1794,14 @@ def dashboard_summary(
                     "display_name": linked_name or user_email,
                     "status": "session_only",
                     "mailbox_access_ready": False,
+                    "automation_health": {
+                        "state": "red",
+                        "label": "Reconnect required",
+                        "automation_ready": False,
+                        "reasons": [
+                            "Account is session-only; reconnect so mailbox tokens are stored."
+                        ],
+                    },
                     "token_updated_at": None,
                     "created_at": None,
                     "updated_at": None,
@@ -2641,6 +2697,14 @@ def classify_inbox_dryrun_log(
 #   a no-op (idempotent; we return the existing row's metadata).
 
 INBOX_MOVE_MAX_BATCH = 25
+INBOX_AUTOMATION_MAX_BATCH = 25
+INBOX_AUTOMATION_DEFAULT_CONFIDENCE = 0.90
+AUTOMATION_ALLOWED_CATEGORIES = {
+    "it_reports",
+    "newsletters_news",
+    "marketing_promotions",
+    "notifications_system",
+}
 
 
 def _resolve_target_folder_id(account_id: str, recommended_folder: str) -> tuple[str | None, str]:
@@ -3112,6 +3176,248 @@ async def move_inbox_messages(
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
         "failed": sum(1 for r in results if r["status"] == "failed"),
         "rejected": sum(1 for r in results if r["status"] == "rejected"),
+        "review_folder": classifier_module.REVIEW_FOLDER,
+        "results": results,
+    }
+
+
+def _automation_safety_skip_reason(
+    decision: classifier_module.ClassificationDecision,
+    min_confidence: float,
+) -> str | None:
+    if decision.forced_review:
+        return "forced_review"
+    if decision.recommended_folder == classifier_module.REVIEW_FOLDER:
+        return "review_folder"
+    if decision.category not in AUTOMATION_ALLOWED_CATEGORIES:
+        return "category_not_automation_allowed"
+    if decision.confidence < min_confidence:
+        return "confidence_below_automation_threshold"
+    if decision.confidence_band != "high":
+        return "confidence_band_not_high"
+    if decision.safety_flags:
+        return "safety_flags_present"
+    return None
+
+
+@app.post("/mail/inbox/automove")
+async def automove_inbox_messages(
+    account: str = Query(..., description="Connected account email."),
+    limit: int = Query(default=10, ge=1, le=INBOX_AUTOMATION_MAX_BATCH),
+    min_confidence: float = Query(
+        default=INBOX_AUTOMATION_DEFAULT_CONFIDENCE,
+        ge=0.90,
+        le=1.0,
+        description="Minimum classifier confidence required for automated moves.",
+    ),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Classify recent inbox messages and move only automation-safe matches.
+
+    This endpoint is intentionally conservative. It never deletes, sends, or
+    archives mail. It moves only high-confidence, non-review recommendations
+    in explicitly automation-allowed categories. All skipped and moved
+    decisions are logged in ``mailbox_move_action`` for the Audit Log.
+    """
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    target = _scope_account_to_session(rows, account)
+
+    health = _automation_health_for_account(target)
+    if not health["automation_ready"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Automation is not ready for this account.",
+                "automation_health": health,
+            },
+        )
+
+    access_token, account_record = await _graph_access_token_for_email(target["email"])
+    account_id = account_record["account_id"]
+    account_email = account_record["email"]
+    messages = await _list_inbox_messages(access_token, limit=limit)
+    provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
+
+    results: list[dict[str, Any]] = []
+    for message in messages:
+        provider_message_id = str(message.get("id") or "")
+        if not provider_message_id:
+            continue
+        try:
+            ci = _classification_input_from_message(message)
+            decision = await classifier_module.classify_with_provider(
+                ci,
+                provider_config=provider_cfg,
+            )
+            _persist_dry_run_classification(
+                account_id=account_id,
+                account_email=account_email,
+                message=message,
+                decision=decision,
+                provider_cfg=provider_cfg,
+                status="classified",
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("inbox.automove.classify_failed message_id=%s", provider_message_id)
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "failed",
+                    "error": f"classification_failed: {exc}",
+                    "moved": False,
+                }
+            )
+            continue
+
+        dry_run_row = _load_dry_run_row(account_id, provider_message_id)
+        skip_reason = _automation_safety_skip_reason(decision, min_confidence)
+        if skip_reason:
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=message.get("parentFolderId"),
+                destination_folder_id=None,
+                destination_folder_name=decision.recommended_folder,
+                dry_run_classification_id=dry_run_row["id"] if dry_run_row else None,
+                forced_review=bool(decision.forced_review),
+                status="skipped",
+                error=f"automation_{skip_reason}",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "subject": message.get("subject") or "",
+                    "status": "skipped",
+                    "error": f"automation_{skip_reason}",
+                    "recommended_folder": decision.recommended_folder,
+                    "confidence": decision.confidence,
+                    "moved": False,
+                }
+            )
+            continue
+
+        existing = _existing_succeeded_move(account_id, provider_message_id)
+        if existing:
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "subject": message.get("subject") or "",
+                    "status": "already_moved",
+                    "destination_folder_name": existing["destination_folder_name"],
+                    "moved": False,
+                }
+            )
+            continue
+
+        destination_folder_id, resolved_name = _resolve_target_folder_id(
+            account_id, decision.recommended_folder
+        )
+        if not destination_folder_id:
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=message.get("parentFolderId"),
+                destination_folder_id=None,
+                destination_folder_name=decision.recommended_folder,
+                dry_run_classification_id=dry_run_row["id"] if dry_run_row else None,
+                forced_review=False,
+                status="skipped",
+                error="automation_destination_folder_not_inventoried",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "subject": message.get("subject") or "",
+                    "status": "skipped",
+                    "error": "automation_destination_folder_not_inventoried",
+                    "recommended_folder": decision.recommended_folder,
+                    "moved": False,
+                }
+            )
+            continue
+
+        try:
+            await _graph_move_message(access_token, provider_message_id, destination_folder_id)
+        except HTTPException as exc:
+            detail = exc.detail
+            error_message = detail.get("message") if isinstance(detail, dict) else str(detail)
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=message.get("parentFolderId"),
+                destination_folder_id=destination_folder_id,
+                destination_folder_name=resolved_name or decision.recommended_folder,
+                dry_run_classification_id=dry_run_row["id"] if dry_run_row else None,
+                forced_review=False,
+                status="failed",
+                error=error_message or "automation_graph_move_failed",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "subject": message.get("subject") or "",
+                    "status": "failed",
+                    "error": error_message or "automation_graph_move_failed",
+                    "destination_folder_name": resolved_name or decision.recommended_folder,
+                    "moved": False,
+                }
+            )
+            continue
+
+        _persist_move_action(
+            account_id=account_id,
+            account_email=account_email,
+            requested_by_email=user_email,
+            provider_message_id=provider_message_id,
+            source_folder_id=message.get("parentFolderId"),
+            destination_folder_id=destination_folder_id,
+            destination_folder_name=resolved_name or decision.recommended_folder,
+            dry_run_classification_id=dry_run_row["id"] if dry_run_row else None,
+            forced_review=False,
+            status="succeeded",
+            error=None,
+            completed=True,
+        )
+        results.append(
+            {
+                "provider_message_id": provider_message_id,
+                "subject": message.get("subject") or "",
+                "status": "succeeded",
+                "destination_folder_id": destination_folder_id,
+                "destination_folder_name": resolved_name or decision.recommended_folder,
+                "confidence": decision.confidence,
+                "moved": True,
+            }
+        )
+
+    return {
+        "automation": True,
+        "destructive": True,
+        "operation": "move",
+        "generated_at": _utcnow().isoformat(),
+        "account": {
+            "email": account_email,
+            "display_name": account_record["display_name"],
+        },
+        "limit": limit,
+        "min_confidence": min_confidence,
+        "fetched": len(messages),
+        "moved": sum(1 for r in results if r["status"] == "succeeded"),
+        "already_moved": sum(1 for r in results if r["status"] == "already_moved"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "failed": sum(1 for r in results if r["status"] == "failed"),
         "review_folder": classifier_module.REVIEW_FOLDER,
         "results": results,
     }
