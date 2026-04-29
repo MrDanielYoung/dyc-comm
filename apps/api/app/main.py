@@ -47,6 +47,20 @@ DEFAULT_MVP_FOLDER_SPECS = (
     {"name": "80 - Travel", "aliases": ("Travel",)},
     {"name": "90 - IT Reports", "aliases": ("IT Reports",)},
 )
+DEFAULT_OUTLOOK_CATEGORY_SPECS = (
+    {"displayName": "DYC - P0 Today", "color": "preset0"},
+    {"displayName": "DYC - P1 This Week", "color": "preset1"},
+    {"displayName": "DYC - Reply Needed", "color": "preset7"},
+    {"displayName": "DYC - Waiting", "color": "preset3"},
+    {"displayName": "DYC - Read Later", "color": "preset10"},
+    {"displayName": "DYC - FYI", "color": "preset12"},
+    {"displayName": "DYC - Money", "color": "preset4"},
+    {"displayName": "DYC - Legal Contract", "color": "preset9"},
+    {"displayName": "DYC - Customer Patient", "color": "preset8"},
+    {"displayName": "DYC - Travel Logistics", "color": "preset5"},
+    {"displayName": "DYC - Needs Review", "color": "preset15"},
+    {"displayName": "DYC - Automation Moved", "color": "preset6"},
+)
 _DB_BOOTSTRAPPED = False
 
 # Runtime env-var contract reported by /config-check. Mirrors the variables
@@ -429,6 +443,31 @@ async def _graph_post(access_token: str, path: str, payload: dict[str, Any]) -> 
                 "body": response.text,
             },
         )
+    return response.json()
+
+
+async def _graph_patch(access_token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.patch(
+            f"https://graph.microsoft.com/v1.0{path}",
+            headers=headers,
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Microsoft Graph write request failed",
+                "status_code": response.status_code,
+                "body": response.text,
+            },
+        )
+    if not response.content:
+        return {}
     return response.json()
 
 
@@ -2352,7 +2391,9 @@ async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, 
         params={
             "$top": str(limit),
             "$orderby": "receivedDateTime desc",
-            "$select": "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview",
+            "$select": (
+                "id,receivedDateTime,subject,from,sender,parentFolderId," "bodyPreview,categories"
+            ),
         },
     )
     return payload.get("value", [])
@@ -2371,7 +2412,9 @@ async def _list_inbox_messages_paginated(
         params={
             "$top": str(page_size),
             "$orderby": "receivedDateTime desc",
-            "$select": "id,receivedDateTime,subject,from,sender,parentFolderId,bodyPreview",
+            "$select": (
+                "id,receivedDateTime,subject,from,sender,parentFolderId," "bodyPreview,categories"
+            ),
         },
     )
 
@@ -3311,6 +3354,81 @@ def _automation_safety_skip_reason(
     return None
 
 
+def _message_categories(message: dict[str, Any]) -> list[str]:
+    categories = message.get("categories")
+    if not isinstance(categories, list):
+        return []
+    return [str(category) for category in categories if category]
+
+
+def _desired_attention_categories(
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+    *,
+    moved: bool,
+) -> list[str]:
+    labels: list[str] = []
+    subject = str(message.get("subject") or "").lower()
+    body = str(message.get("bodyPreview") or "").lower()
+    combined = f"{subject}\n{body}"
+
+    if moved:
+        labels.append("DYC - Automation Moved")
+
+    if decision.forced_review or decision.recommended_folder == classifier_module.REVIEW_FOLDER:
+        labels.append("DYC - Needs Review")
+
+    if decision.category == "human_direct":
+        labels.append("DYC - Reply Needed")
+    if decision.category == "finance_money":
+        labels.append("DYC - Money")
+    if decision.category == "legal_contracts" or "legal_or_contractual" in decision.safety_flags:
+        labels.append("DYC - Legal Contract")
+    if "sensitive_content" in decision.safety_flags:
+        labels.append("DYC - Customer Patient")
+    if decision.category in {"newsletters_news", "marketing_promotions"}:
+        labels.append("DYC - Read Later")
+    if decision.category in {"it_reports", "notifications_system", "service_updates"}:
+        labels.append("DYC - FYI")
+    if decision.category == "meetings_scheduling" or any(
+        word in combined
+        for word in ("flight", "hotel", "boarding", "reservation", "travel", "itinerary")
+    ):
+        labels.append("DYC - Travel Logistics")
+    if any(word in combined for word in ("urgent", "today", "due today", "asap")):
+        labels.append("DYC - P0 Today")
+    elif any(word in combined for word in ("this week", "by friday", "deadline")):
+        labels.append("DYC - P1 This Week")
+
+    return list(dict.fromkeys(labels))
+
+
+async def _apply_message_categories(
+    access_token: str,
+    provider_message_id: str,
+    existing_categories: list[str],
+    desired_categories: list[str],
+) -> list[str]:
+    if not desired_categories:
+        return existing_categories
+    merged = list(dict.fromkeys([*existing_categories, *desired_categories]))
+    if merged == existing_categories:
+        return existing_categories
+    await _graph_patch(
+        access_token,
+        f"/me/messages/{provider_message_id}",
+        {"categories": merged},
+    )
+    return merged
+
+
+def _category_apply_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        return detail.get("message") if isinstance(detail, dict) else str(detail)
+    return str(exc)
+
+
 @app.post("/mail/inbox/automove")
 async def automove_inbox_messages(
     account: str = Query(..., description="Connected account email."),
@@ -3377,6 +3495,7 @@ async def _automove_for_account(
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
 
     results: list[dict[str, Any]] = []
+    moved_count = 0
     for message in messages:
         provider_message_id = str(message.get("id") or "")
         if not provider_message_id:
@@ -3412,6 +3531,22 @@ async def _automove_for_account(
         dry_run_row = _load_dry_run_row(account_id, provider_message_id)
         skip_reason = _automation_safety_skip_reason(decision, min_confidence)
         if skip_reason:
+            applied_categories: list[str] = []
+            label_error: str | None = None
+            desired_categories = _desired_attention_categories(
+                decision,
+                message,
+                moved=False,
+            )
+            try:
+                applied_categories = await _apply_message_categories(
+                    access_token,
+                    provider_message_id,
+                    _message_categories(message),
+                    desired_categories,
+                )
+            except Exception as exc:
+                label_error = _category_apply_error(exc)
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
@@ -3435,11 +3570,29 @@ async def _automove_for_account(
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
+                    "categories_applied": applied_categories,
+                    "category_error": label_error,
                 }
             )
             continue
 
-        if sum(1 for r in results if r["status"] == "succeeded") >= move_limit:
+        if moved_count >= move_limit:
+            applied_categories = []
+            label_error = None
+            desired_categories = _desired_attention_categories(
+                decision,
+                message,
+                moved=False,
+            )
+            try:
+                applied_categories = await _apply_message_categories(
+                    access_token,
+                    provider_message_id,
+                    _message_categories(message),
+                    desired_categories,
+                )
+            except Exception as exc:
+                label_error = _category_apply_error(exc)
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
@@ -3463,6 +3616,8 @@ async def _automove_for_account(
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
+                    "categories_applied": applied_categories,
+                    "category_error": label_error,
                 }
             )
             continue
@@ -3510,6 +3665,23 @@ async def _automove_for_account(
             )
             continue
 
+        applied_categories = []
+        label_error = None
+        desired_categories = _desired_attention_categories(
+            decision,
+            message,
+            moved=True,
+        )
+        try:
+            applied_categories = await _apply_message_categories(
+                access_token,
+                provider_message_id,
+                _message_categories(message),
+                desired_categories,
+            )
+        except Exception as exc:
+            label_error = _category_apply_error(exc)
+
         try:
             await _graph_move_message(access_token, provider_message_id, destination_folder_id)
         except HTTPException as exc:
@@ -3555,6 +3727,7 @@ async def _automove_for_account(
             error=None,
             completed=True,
         )
+        moved_count += 1
         results.append(
             {
                 "provider_message_id": provider_message_id,
@@ -3564,6 +3737,8 @@ async def _automove_for_account(
                 "destination_folder_name": resolved_name or decision.recommended_folder,
                 "confidence": decision.confidence,
                 "moved": True,
+                "categories_applied": applied_categories,
+                "category_error": label_error,
             }
         )
 
