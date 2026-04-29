@@ -40,17 +40,15 @@ def test_login_keeps_sign_in_title_and_microsoft_button():
     assert "Sign in with Microsoft" in html
 
 
-def test_primary_login_uses_danielyoung_io_login_hint():
-    """The primary gate + header sign-in entry points pre-fill the
-    danielyoung.io account so the operator lands on the standard
-    Microsoft picker for the right tenant. The 'Connect a different
-    account' CTA must remain hint-free so additional account flows are
-    not constrained."""
+def test_primary_login_uses_unhinted_microsoft_start_url():
+    """The primary gate + header sign-in entry points should hand control
+    to Microsoft without a default login_hint so Microsoft can render its
+    tenant-branded account picker/sign-in page."""
     html = _read_html()
-    assert 'PRIMARY_LOGIN_HINT = "daniel@danielyoung.io"' in html
-    assert "gateConnectLink.href = PRIMARY_SIGN_IN_URL" in html
-    assert "headerSignInLink.href = PRIMARY_SIGN_IN_URL" in html
-    # The "different account" link must still use the un-hinted URL.
+    assert "PRIMARY_LOGIN_HINT" not in html
+    assert "PRIMARY_SIGN_IN_URL" not in html
+    assert "gateConnectLink.href = SIGN_IN_URL" in html
+    assert "headerSignInLink.href = SIGN_IN_URL" in html
     assert "connectGenericLink.href = SIGN_IN_URL" in html
 
 
@@ -118,12 +116,12 @@ def _decide(scenario: dict) -> dict:
     return _run_node(harness)
 
 
-PRIMARY_URL = "https://api.example.com/auth/microsoft/start?login_hint=daniel%40danielyoung.io"
+PRIMARY_URL = "https://api.example.com/auth/microsoft/start"
 
 
 def test_initial_unauthenticated_visit_redirects_to_microsoft():
     """A normal first visit with no linked account must redirect to the
-    primary Microsoft sign-in URL — not render the in-app login card.
+    unhinted Microsoft sign-in URL — not render the in-app login card.
     This is the bug PR #49 tried to fix; the previous string-only test
     let the regression slip through."""
     decision = _decide(
