@@ -158,3 +158,27 @@ def test_run_inbox_classification_dryrun_string_present():
     """
     html = _read_html()
     assert "Run inbox classification (dry-run)" in html
+
+
+def test_sorting_panel_exposes_move_action_with_confirmation():
+    """The dry-run row must expose a Move action that calls the new
+    /mail/inbox/move endpoint with a confirmation prompt before
+    issuing the Graph write. The button is rendered per-row by the JS
+    table renderer so the static HTML carries the testid attribute and
+    the JS path string.
+    """
+    html = _read_html()
+    # Banner/copy explaining what Move does (and what it doesn't do).
+    assert 'data-testid="sorting-move-banner"' in html
+    assert "Move action" in html
+    assert "Nothing is deleted" in html
+    # Per-row Move button rendered by the JS table renderer.
+    assert 'data-testid="sorting-move-button"' in html
+    # The new POST endpoint is wired up.
+    assert "/mail/inbox/move" in html
+    # A confirmation dialog must run before the Graph call so the
+    # operator can't fat-finger a move.
+    assert "window.confirm" in html
+    # The Action column header must be present so operators can see
+    # which column carries the move control.
+    assert "<th>Action</th>" in html
