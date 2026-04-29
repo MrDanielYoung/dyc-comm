@@ -739,3 +739,69 @@ def test_automove_rejects_unhealthy_account(monkeypatch):
     )
     assert response.status_code == 409
     assert response.json()["detail"]["automation_health"]["state"] == "red"
+
+
+def test_scheduled_automation_requires_token(monkeypatch):
+    monkeypatch.delenv("AUTOMATION_RUN_TOKEN", raising=False)
+    client = TestClient(main.app)
+    response = client.post("/automation/run")
+    assert response.status_code == 503
+
+    monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "expected-token")
+    response = client.post(
+        "/automation/run",
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert response.status_code == 401
+
+
+def test_scheduled_automation_runs_yellow_and_skips_red(monkeypatch):
+    monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "expected-token")
+    accounts = [
+        _account_row("yellow@example.com"),
+        _account_row("red@example.com"),
+    ]
+    monkeypatch.setattr(main, "_list_automation_accounts", lambda: accounts)
+
+    def fake_health(row):
+        if row["email"] == "red@example.com":
+            return {
+                "state": "red",
+                "label": "Reconnect required",
+                "automation_ready": False,
+                "reasons": ["Reconnect."],
+            }
+        return {
+            "state": "yellow",
+            "label": "Folders incomplete",
+            "automation_ready": True,
+            "reasons": ["Bootstrap recommended."],
+        }
+
+    monkeypatch.setattr(main, "_automation_health_for_account", fake_health)
+
+    async def fake_automove(requested_by_email, target, limit, min_confidence):
+        assert requested_by_email == "automation@scheduler"
+        assert target["email"] == "yellow@example.com"
+        return {
+            "account": {"email": target["email"]},
+            "moved": 2,
+            "skipped": 1,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(main, "_automove_for_account", fake_automove)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/automation/run",
+        headers={"Authorization": "Bearer expected-token"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scheduled"] is True
+    assert payload["accounts_seen"] == 2
+    assert payload["accounts_completed"] == 1
+    assert payload["accounts_skipped"] == 1
+    assert payload["moved"] == 2
