@@ -39,7 +39,7 @@ def test_sorting_panel_has_nondestructive_banner():
     html = _read_html()
     assert 'data-testid="sorting-nondestructive-banner"' in html
     # Phrasing must make it unambiguous nothing is moved or sent.
-    assert "No messages are moved" in html
+    assert "dry-run itself never moves" in html
     assert "10 - Review" in html
 
 
@@ -139,9 +139,24 @@ def test_account_nav_supports_multi_account_selection():
     html = _read_html()
     assert 'data-testid="account-nav"' in html
     assert 'data-testid="account-nav-list"' in html
+    assert "Select one mailbox here" in html
     assert "function selectAccount(email)" in html
     # Sorting log + dashboard reload on account switch.
     assert "loadSortingLog().catch" in html
+
+
+def test_activity_log_renders_message_move_events():
+    html = _read_html()
+    assert 'id="messageMovementList"' in html
+    assert "message_movement" in html
+    assert "Moved to" in html
+
+
+def test_connect_copy_does_not_claim_single_tenant_dhw_blocker():
+    html = _read_html()
+    assert "currently single-tenant" not in html
+    assert "DHW tenant cannot sign in directly" not in html
+    assert "Multi-account session" in html
 
 
 def test_inbox_sorting_string_present():

@@ -1067,6 +1067,13 @@
         color: var(--muted);
       }
 
+      .account-nav-help {
+        margin: -8px 0 0;
+        color: var(--muted);
+        font-size: 0.76rem;
+        line-height: 1.45;
+      }
+
       .account-nav-list {
         display: flex;
         flex-direction: column;
@@ -1386,7 +1393,11 @@
               data-testid="account-nav"
               aria-label="Connected accounts"
             >
-              <p class="account-nav-heading">Accounts</p>
+              <p class="account-nav-heading">Connected accounts</p>
+              <p class="account-nav-help">
+                Select one mailbox here. Dashboard, Sorting, Activity, Alerts,
+                and Diagnostics are scoped to the selected account.
+              </p>
               <div
                 class="account-nav-list"
                 id="accountNavList"
@@ -1400,25 +1411,25 @@
                 data-testid="account-nav-connect"
                 hidden
               >
-                <h3>+ Add DHW account</h3>
+                <h3>Add another mailbox</h3>
                 <p>
                   Link <code>daniel.young@digitalhealthworks.com</code> as a
-                  second mailbox.
+                  second Microsoft 365 mailbox in this session.
                 </p>
                 <a
                   class="button-link primary"
                   id="accountNavConnectLink"
                   data-testid="account-nav-connect-dhw"
                   href="#"
-                >Connect DHW</a>
+                >Connect DHW mailbox</a>
                 <p
                   class="tenant-warning"
                   data-testid="account-nav-tenant-warning"
                 >
-                  <strong>Heads up — tenant access</strong>
-                  If sign-in fails with <code>AADSTS50020</code>, the DHW
-                  account is in a different Microsoft tenant than this app.
-                  See <a
+                  <strong>Multi-account scope</strong>
+                  The Microsoft sign-in prompt opens for this mailbox. After it
+                  is connected, use the account selector above to switch between
+                  mailboxes. See <a
                     href="https://github.com/MrDanielYoung/dyc-comm/blob/main/docs/auth-troubleshooting.md"
                     target="_blank"
                     rel="noopener"
@@ -1537,7 +1548,8 @@
                         Add <code>daniel.young@digitalhealthworks.com</code> as a second
                         Microsoft 365 mailbox. The Microsoft sign-in page will be
                         pre-filled with this address (you can still pick a different
-                        account on the picker).
+                        account on the picker). Connected accounts appear in the
+                        account selector; each tab is scoped to the selected mailbox.
                       </p>
                       <div class="action-row">
                         <a
@@ -1556,13 +1568,11 @@
                         class="tenant-warning"
                         data-testid="connect-dhw-tenant-warning"
                       >
-                        <strong>If DHW sign-in fails (AADSTS50020)</strong>
-                        The Entra app is currently single-tenant in
-                        <em>Decoding Options Inc.</em>, so accounts from the
-                        DHW tenant cannot sign in directly. Either invite the
-                        DHW user as an external (guest) user into the Decoding
-                        Options tenant, or switch the Entra app to multi-tenant
-                        and have a DHW admin grant consent. See
+                        <strong>Multi-account session</strong>
+                        This app can keep more than one Microsoft 365 mailbox
+                        linked to the same browser session. If Microsoft blocks
+                        a tenant during sign-in, check tenant consent and
+                        allow-list configuration in
                         <a
                           href="https://github.com/MrDanielYoung/dyc-comm/blob/main/docs/auth-troubleshooting.md"
                           target="_blank"
@@ -1586,11 +1596,10 @@
                       ></span>
                     </div>
                     <p class="empty-state">
-                      Live operational signals for the selected account. Metrics tagged
-                      <span class="metric-tag pending">pending</span>
-                      require ingestion or audit instrumentation that is not yet
-                      wired up; they will stay empty until the connector pipeline
-                      lands.
+                      Live operational signals for the selected account. Folder
+                      bootstrap and approved message moves are audited now;
+                      aggregate volume metrics stay empty until the connector
+                      ingestion pipeline lands.
                     </p>
                     <div class="dashboard-totals" id="dashboardTotals">
                       <div class="dashboard-tile">
@@ -1685,7 +1694,7 @@
                     data-testid="sorting-panel"
                   >
                     <div class="panel-account-row">
-                      <h2 class="section-title">Inbox sorting (read-only dry-run)</h2>
+                      <h2 class="section-title">Inbox sorting</h2>
                       <span
                         class="selected-account-label"
                         id="sortingSelectedAccount"
@@ -1700,9 +1709,9 @@
                       <span aria-hidden="true">&#9432;</span>
                       <span>
                         <strong>Read-only:</strong>
-                        this scan only reads recent inbox messages via Microsoft Graph
+                        classification only reads recent inbox messages via Microsoft Graph
                         and records what the classifier <em>would</em> do.
-                        <strong>No messages are moved, sent, or deleted.</strong>
+                        <strong>The dry-run itself never moves, sends, or deletes messages.</strong>
                         Unclear or low-confidence messages route to
                         <code>10 - Review</code> for a human decision.
                       </span>
@@ -1848,8 +1857,11 @@
                     </div>
                     <h2 class="section-title">Message movement</h2>
                     <p class="metric-reason" id="messageMovementReason">
-                      Pending instrumentation.
+                      No approved moves recorded yet.
                     </p>
+                    <div class="activity-list" id="messageMovementList">
+                      <p class="empty-state">No approved message moves yet.</p>
+                    </div>
                   </section>
                 </div>
               </section>
@@ -2018,6 +2030,7 @@
       const activityList = document.getElementById("activityList");
       const activityRefresh = document.getElementById("activityRefresh");
       const messageMovementReason = document.getElementById("messageMovementReason");
+      const messageMovementList = document.getElementById("messageMovementList");
       const alertsList = document.getElementById("alertsList");
       const alertsRefresh = document.getElementById("alertsRefresh");
       const alertsBadge = document.getElementById("alertsBadge");
@@ -2484,26 +2497,53 @@
         const folder = payload && payload.folder_activity;
         const events = (folder && folder.events) || [];
         const movement = payload && payload.message_movement;
-        if (movement && movement.reason) {
-          messageMovementReason.textContent = movement.reason;
-        }
         if (!events.length) {
           const reason = (folder && folder.reason)
             || "No folder activity yet — bootstrap or sync the inventory to populate this feed.";
           activityList.innerHTML = `<p class="empty-state">${escapeHtml(reason)}</p>`;
+        } else {
+          activityList.innerHTML = events.map((event) => {
+            const folderInfo = event.folder || {};
+            const account = event.account || {};
+            const eventType = event.event_type || "folder.event";
+            const tag = folderInfo.is_dyc_target ? "DYC target" : (folderInfo.ownership || "folder");
+            return `
+              <div class="activity-row">
+                <div>
+                  <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(eventType)}</p>
+                  <p class="activity-title">${escapeHtml(folderInfo.display_name || folderInfo.canonical_name || "Folder")}</p>
+                  <p class="activity-account">${escapeHtml(account.email || "")}</p>
+                </div>
+                <span class="folder-entry-tag">${escapeHtml(tag)}</span>
+              </div>
+            `;
+          }).join("");
+        }
+
+        const moveEvents = (movement && movement.events) || [];
+        if (messageMovementReason) {
+          messageMovementReason.textContent = moveEvents.length
+            ? `Showing ${moveEvents.length} approved message move${moveEvents.length === 1 ? "" : "s"} for the selected account.`
+            : ((movement && movement.reason) || "No approved message moves yet.");
+        }
+        if (!messageMovementList) return;
+        if (!moveEvents.length) {
+          messageMovementList.innerHTML =
+            `<p class="empty-state">${escapeHtml((movement && movement.reason) || "No approved message moves yet.")}</p>`;
           return;
         }
-        activityList.innerHTML = events.map((event) => {
-          const folderInfo = event.folder || {};
+        messageMovementList.innerHTML = moveEvents.map((event) => {
+          const move = event.move || {};
           const account = event.account || {};
-          const eventType = event.event_type || "folder.event";
-          const tag = folderInfo.is_dyc_target ? "DYC target" : (folderInfo.ownership || "folder");
+          const destination = move.destination_folder_name || "Folder";
+          const status = move.status || "unknown";
+          const tag = move.forced_review ? "forced review" : status;
           return `
             <div class="activity-row">
               <div>
-                <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(eventType)}</p>
-                <p class="activity-title">${escapeHtml(folderInfo.display_name || folderInfo.canonical_name || "Folder")}</p>
-                <p class="activity-account">${escapeHtml(account.email || "")}</p>
+                <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(event.event_type || "message.move")}</p>
+                <p class="activity-title">Moved to ${escapeHtml(destination)}</p>
+                <p class="activity-account">${escapeHtml(account.email || move.account_email || "")}</p>
               </div>
               <span class="folder-entry-tag">${escapeHtml(tag)}</span>
             </div>
@@ -2606,7 +2646,7 @@
           `<span><strong>${escapeHtml(String(summary.forced_review ?? 0))}</strong> forced to <code>${escapeHtml(summary.review_folder || "10 - Review")}</code></span>`,
           `<span><strong>${escapeHtml(String(summary.errors ?? 0))}</strong> errors</span>`,
           `<span>AI provider: <strong>${escapeHtml(provider.selected || "none")}</strong>${provider.consulted ? "" : " (not consulted)"}</span>`,
-          `<span><strong>0</strong> messages moved</span>`,
+          `<span><strong>0</strong> messages moved by this dry-run</span>`,
         ];
         sortingSummary.hidden = false;
         sortingSummary.innerHTML = parts.join("");
@@ -2624,7 +2664,7 @@
         const forced = summary.forced_review ?? 0;
         const errors = summary.errors ?? 0;
         dashboardSortingSummary.textContent =
-          `Last dry-run: ${classified}/${fetched} classified, ${forced} routed to ${summary.review_folder || "10 - Review"}, ${errors} errors. No messages were moved.`;
+          `Last dry-run: ${classified}/${fetched} classified, ${forced} routed to ${summary.review_folder || "10 - Review"}, ${errors} errors. Dry-run did not move messages; use per-row Move to apply a recommendation.`;
       }
 
       function renderRecommendationCell(rec) {
@@ -2806,7 +2846,7 @@
             );
           } else {
             setSortingStatus(
-              `Showing ${entries.length} most recent dry-run rows for ${account}. No messages were moved.`,
+              `Showing ${entries.length} most recent dry-run rows for ${account}. Dry-run did not move messages; click Move on a row to apply its recommendation.`,
               "success"
             );
           }
@@ -2943,7 +2983,7 @@
           setSortingStatus(
             `Dry-run complete for ${account}. ${summary.classified}/${summary.fetched} classified, ` +
             `${summary.forced_review} routed to ${summary.review_folder}, ${summary.errors} errors. ` +
-            `No messages were moved.`,
+            `Dry-run did not move messages; click Move on a row to apply its recommendation.`,
             "success"
           );
           // Pull the persisted log so the table reflects DB-of-record ordering.
