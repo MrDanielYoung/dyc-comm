@@ -95,9 +95,7 @@ def _install_dry_run_row(
 
 
 def _install_no_existing_move(monkeypatch):
-    monkeypatch.setattr(
-        main, "_existing_succeeded_move", lambda account_id, msg_id: None
-    )
+    monkeypatch.setattr(main, "_existing_succeeded_move", lambda account_id, msg_id: None)
 
 
 def _install_inventory(monkeypatch, mapping: dict[str, str]):
@@ -197,9 +195,7 @@ def test_move_calls_graph_move_with_resolved_destination(monkeypatch):
 
     async def fail_graph_get(*args, **kwargs):
         graph_calls.append(("GET", args[1] if len(args) > 1 else "?", None))
-        raise AssertionError(
-            "/mail/inbox/move must not issue Graph GETs from the move path"
-        )
+        raise AssertionError("/mail/inbox/move must not issue Graph GETs from the move path")
 
     monkeypatch.setattr(main, "_graph_post", fake_graph_post)
     monkeypatch.setattr(main, "_graph_get", fail_graph_get)
@@ -316,9 +312,7 @@ def test_move_rejects_messages_without_a_dry_run_row(monkeypatch):
     monkeypatch.setattr(main, "_load_dry_run_row", lambda a, m: None)
 
     async def fail_graph_post(*args, **kwargs):
-        raise AssertionError(
-            "must not call Graph for messages without a dry-run row"
-        )
+        raise AssertionError("must not call Graph for messages without a dry-run row")
 
     monkeypatch.setattr(main, "_graph_post", fail_graph_post)
 
@@ -365,9 +359,7 @@ def test_move_skips_when_destination_folder_not_inventoried(monkeypatch):
     _install_inventory(monkeypatch, {})
 
     async def fail_graph_post(*args, **kwargs):
-        raise AssertionError(
-            "must not call Graph when destination folder is not inventoried"
-        )
+        raise AssertionError("must not call Graph when destination folder is not inventoried")
 
     monkeypatch.setattr(main, "_graph_post", fail_graph_post)
 
@@ -416,9 +408,7 @@ def test_move_is_idempotent_when_existing_succeeded_row_present(monkeypatch):
     )
 
     async def fail_graph_post(*args, **kwargs):
-        raise AssertionError(
-            "idempotent move must not call Graph when a succeeded row exists"
-        )
+        raise AssertionError("idempotent move must not call Graph when a succeeded row exists")
 
     monkeypatch.setattr(main, "_graph_post", fail_graph_post)
 
