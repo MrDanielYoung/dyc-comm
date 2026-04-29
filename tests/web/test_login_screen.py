@@ -97,34 +97,33 @@ def _run_node(js: str) -> dict:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
+_HARNESS_TEMPLATE = """\
+%(fn)s
+
+const inputs = %(scenario)s;
+inputs.reauthSignInUrl = (email) =>
+  `https://api.example.com/auth/microsoft/start?login_hint=${encodeURIComponent(email)}`;
+if (inputs.fetchError === 'throw') {
+  inputs.fetchError = new Error(inputs.fetchErrorMessage || 'boom');
+} else {
+  inputs.fetchError = null;
+}
+const decision = decideSessionAction(inputs);
+const out = { kind: decision.kind };
+if (decision.url !== undefined) out.url = decision.url;
+if (decision.chip !== undefined) out.chip = decision.chip;
+if (decision.notice !== undefined) out.notice = decision.notice;
+if (decision.account !== undefined) out.accountEmail = decision.account.email;
+console.log(JSON.stringify(out));
+"""
+
+
 def _decide(scenario: dict) -> dict:
     """Run ``decideSessionAction`` under Node with the given inputs and
     return the decision object."""
     html = _read_html()
     fn = _extract_decide_session_action(html)
-    harness = (
-        fn
-        + "\n"
-        + "const inputs = "
-        + json.dumps(scenario)
-        + ";\n"
-        + "inputs.reauthSignInUrl = (email) => "
-        + "  `https://api.example.com/auth/microsoft/start"
-        + "?login_hint=${encodeURIComponent(email)}`;\n"
-        + "if (inputs.fetchError === 'throw') {\n"
-        + "  inputs.fetchError = new Error(inputs.fetchErrorMessage || 'boom');\n"
-        + "} else {\n"
-        + "  inputs.fetchError = null;\n"
-        + "}\n"
-        + "const decision = decideSessionAction(inputs);\n"
-        # account/payload may contain non-serializable bits; strip for output
-        + "const out = { kind: decision.kind };\n"
-        + "if (decision.url !== undefined) out.url = decision.url;\n"
-        + "if (decision.chip !== undefined) out.chip = decision.chip;\n"
-        + "if (decision.notice !== undefined) out.notice = decision.notice;\n"
-        + "if (decision.account !== undefined) out.accountEmail = decision.account.email;\n"
-        + "console.log(JSON.stringify(out));\n"
-    )
+    harness = _HARNESS_TEMPLATE % {"fn": fn, "scenario": json.dumps(scenario)}
     return _run_node(harness)
 
 
