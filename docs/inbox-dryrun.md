@@ -31,6 +31,7 @@ It is **strictly non-destructive**:
 | --- | --- | --- |
 | `POST` | `/mail/inbox/classify-dryrun?account=<email>&limit=<n>` | Fetch up to `limit` recent inbox messages for `account` and persist a dry-run classification per message. |
 | `GET`  | `/mail/inbox/classify-dryrun/log?account=<email>&limit=<n>` | Read back the persisted dry-run rows for `account`, ordered by received date desc. |
+| `POST` | `/mail/inbox/classify-dryrun/move` | Move a single classified message into its recommended folder. Body: `{account, provider_message_id, target_folder?}`. `forced_review` and any safety flag pin the destination to `10 - Review`. Updates the dry-run row to `status='moved'` (or `'move_failed'`). Backend-only — the web UI does not yet call this endpoint. |
 
 Both endpoints require an authenticated session cookie
 (`dyc_account_email`). The `account` query parameter must match an account

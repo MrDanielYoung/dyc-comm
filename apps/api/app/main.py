@@ -716,11 +716,29 @@ def _ensure_account_tables() -> None:
                     provider_name TEXT,
                     status TEXT NOT NULL DEFAULT 'classified',
                     error TEXT,
+                    executed_at TIMESTAMPTZ,
+                    executed_to_folder TEXT,
+                    executed_provider_folder_id TEXT,
+                    executed_provider_message_id TEXT,
+                    action_error TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     UNIQUE(account_id, provider_message_id)
                 )
                 """
             )
+            # Bring legacy installations forward to the move-execution shape
+            # introduced in migration 0003. Idempotent — IF NOT EXISTS guards
+            # let this run on every bootstrap without affecting fresh DBs.
+            for column_ddl in (
+                "ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ",
+                "ADD COLUMN IF NOT EXISTS executed_to_folder TEXT",
+                "ADD COLUMN IF NOT EXISTS executed_provider_folder_id TEXT",
+                "ADD COLUMN IF NOT EXISTS executed_provider_message_id TEXT",
+                "ADD COLUMN IF NOT EXISTS action_error TEXT",
+            ):
+                cursor.execute(
+                    f"ALTER TABLE inbox_dry_run_classification {column_ddl}"
+                )
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_inbox_dry_run_account_received
@@ -2267,7 +2285,12 @@ def _load_dry_run_log(account_id: str, limit: int) -> list[dict[str, Any]]:
                         provider_name,
                         status,
                         error,
-                        created_at
+                        created_at,
+                        executed_at,
+                        executed_to_folder,
+                        executed_provider_folder_id,
+                        executed_provider_message_id,
+                        action_error
                     FROM inbox_dry_run_classification
                     WHERE account_id = %s
                     ORDER BY COALESCE(received_at, created_at) DESC
@@ -2302,6 +2325,11 @@ def _load_dry_run_log(account_id: str, limit: int) -> list[dict[str, Any]]:
             "status": row[15],
             "error": row[16],
             "created_at": row[17].isoformat() if row[17] else None,
+            "executed_at": row[18].isoformat() if row[18] else None,
+            "executed_to_folder": row[19],
+            "executed_provider_folder_id": row[20],
+            "executed_provider_message_id": row[21],
+            "action_error": row[22],
         }
         for row in rows
     ]
@@ -2426,6 +2454,347 @@ def classify_inbox_dryrun_log(
         "limit": limit,
         "count": len(entries),
         "entries": entries,
+        "review_folder": classifier_module.REVIEW_FOLDER,
+    }
+
+
+# =========================================================================
+# Inbox dry-run: human-approved move
+# =========================================================================
+#
+# Acts on a single dry-run row by moving the underlying Graph message into
+# the recommended folder. The move is the only mailbox-mutating call this
+# code path can issue; sends and deletes are not implemented and are not
+# allowed by the v1 safety model. Constraints enforced here:
+#
+#   * Must have an authenticated session and ``account`` must match a
+#     connected account on that session (404 otherwise).
+#   * Must reference a persisted dry-run row by provider_message_id (the
+#     id Graph returned at classify time). 404 otherwise.
+#   * forced_review or any safety_flag pins the destination to the
+#     canonical 10 - Review folder regardless of what the caller asked
+#     for. The classifier already does this on the recommendation, this
+#     is a defense-in-depth guardrail in case the persisted row was
+#     written before the safety rule existed.
+#   * Destination must resolve to a known canonical DYC folder. We do not
+#     support arbitrary user folders here.
+#
+# The Graph call is POST /me/messages/{id}/move. The move returns a NEW
+# message id (the id changes when an item moves between folders); we
+# persist both the original and the new id so the audit trail stays
+# linkable from either side.
+
+
+def _load_dry_run_row(
+    account_id: str, provider_message_id: str
+) -> dict[str, Any] | None:
+    if not _database_url():
+        return None
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        recommended_folder,
+                        category,
+                        confidence,
+                        confidence_band,
+                        forced_review,
+                        safety_flags,
+                        status,
+                        executed_at,
+                        executed_to_folder,
+                        executed_provider_folder_id,
+                        executed_provider_message_id
+                    FROM inbox_dry_run_classification
+                    WHERE account_id = %s AND provider_message_id = %s
+                    """,
+                    (account_id, provider_message_id),
+                )
+                row = cursor.fetchone()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load inbox dry-run row from PostgreSQL.",
+        ) from exc
+
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "account_id": row[1],
+        "account_email": row[2],
+        "provider_message_id": row[3],
+        "recommended_folder": row[4],
+        "category": row[5],
+        "confidence": float(row[6]) if row[6] is not None else 0.0,
+        "confidence_band": row[7],
+        "forced_review": bool(row[8]),
+        "safety_flags": list(row[9] or []),
+        "status": row[10],
+        "executed_at": row[11],
+        "executed_to_folder": row[12],
+        "executed_provider_folder_id": row[13],
+        "executed_provider_message_id": row[14],
+    }
+
+
+def _record_dry_run_move(
+    *,
+    account_id: str,
+    provider_message_id: str,
+    status: str,
+    executed_to_folder: str | None,
+    executed_provider_folder_id: str | None,
+    executed_provider_message_id: str | None,
+    action_error: str | None,
+) -> None:
+    if not _database_url():
+        return
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    executed_at = _utcnow() if status == "moved" else None
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE inbox_dry_run_classification
+                    SET status = %s,
+                        executed_at = %s,
+                        executed_to_folder = %s,
+                        executed_provider_folder_id = %s,
+                        executed_provider_message_id = %s,
+                        action_error = %s
+                    WHERE account_id = %s AND provider_message_id = %s
+                    """,
+                    (
+                        status,
+                        executed_at,
+                        executed_to_folder,
+                        executed_provider_folder_id,
+                        executed_provider_message_id,
+                        action_error,
+                        account_id,
+                        provider_message_id,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to record inbox dry-run move in PostgreSQL.",
+        ) from exc
+
+
+def _resolve_target_folder_canonical(requested: str | None, dry_run: dict[str, Any]) -> str:
+    """Pick the canonical destination folder, applying safety constraints.
+
+    forced_review or any non-empty safety_flag pins the destination to
+    ``10 - Review`` regardless of what the caller asked for. Otherwise we
+    use the explicit ``requested`` target when supplied, falling back to
+    the persisted recommendation.
+
+    The destination must resolve to one of the canonical DYC folder
+    specs — arbitrary user folders are not allowed in this slice.
+    """
+    has_safety_flags = bool(dry_run.get("safety_flags"))
+    if dry_run.get("forced_review") or has_safety_flags:
+        if requested and _fold_name(requested) != _fold_name(classifier_module.REVIEW_FOLDER):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This message was forced to review by the classifier safety pass; "
+                    f"the only allowed destination is {classifier_module.REVIEW_FOLDER}."
+                ),
+            )
+        return classifier_module.REVIEW_FOLDER
+
+    candidate = (requested or dry_run.get("recommended_folder") or "").strip()
+    if not candidate:
+        raise HTTPException(
+            status_code=409,
+            detail="Dry-run row has no recommended folder; cannot derive a move target.",
+        )
+    folder_spec = _folder_spec_by_name(candidate)
+    if not folder_spec:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Target folder '{candidate}' is not a canonical DYC-managed folder. "
+                "Only canonical folders (e.g. 10 - Review, 20 - News) may receive moves."
+            ),
+        )
+    return folder_spec["name"]
+
+
+async def _resolve_provider_folder_id(access_token: str, canonical_name: str) -> str:
+    """Find the Graph folder id for a canonical DYC folder.
+
+    Reads the live mailFolders list and matches by the canonical name or
+    any registered alias (case-insensitive). Returns 409 if the folder is
+    missing — the operator must run the bootstrap flow first so the move
+    target exists.
+    """
+    folder_spec = _folder_spec_by_name(canonical_name)
+    if not folder_spec:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Unknown canonical folder '{canonical_name}'.",
+        )
+    candidate_names = {_fold_name(folder_spec["name"])}
+    for alias in folder_spec["aliases"]:
+        candidate_names.add(_fold_name(alias))
+
+    folders = await _list_mail_folders(access_token, include_hidden=False)
+    for folder in folders:
+        if _fold_name(str(folder.get("displayName") or "")) in candidate_names:
+            folder_id = folder.get("id")
+            if folder_id:
+                return str(folder_id)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Destination folder '{folder_spec['name']}' was not found in the mailbox. "
+            "Run the folder bootstrap before moving messages."
+        ),
+    )
+
+
+@app.post("/mail/inbox/classify-dryrun/move")
+async def move_classified_message(
+    request: Request,
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Move a single classified message into its recommended folder.
+
+    Request body (JSON):
+
+    * ``account`` (str, required) — connected account email; must match a
+      session-linked account.
+    * ``provider_message_id`` (str, required) — id of the Graph message
+      previously seen by the dry-run classifier.
+    * ``target_folder`` (str, optional) — canonical folder name. When
+      omitted we use the recommended folder from the dry-run row. Items
+      with ``forced_review`` or any safety flag are always routed to
+      ``10 - Review`` regardless of this field.
+
+    Behavior:
+
+    * Read-only Graph call to list folders, then a single
+      ``POST /me/messages/{id}/move`` write. No deletes, no sends.
+    * The dry-run row is updated to ``status='moved'`` with execution
+      metadata on success, or ``'move_failed'`` with ``action_error`` on
+      failure.
+    """
+    user_email = _resolve_session_user_email(linked_email)
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+
+    account_email = str(body.get("account") or "").strip()
+    provider_message_id = str(body.get("provider_message_id") or "").strip()
+    requested_target = body.get("target_folder")
+    if requested_target is not None and not isinstance(requested_target, str):
+        raise HTTPException(status_code=400, detail="target_folder must be a string.")
+
+    if not account_email:
+        raise HTTPException(status_code=400, detail="account is required.")
+    if not provider_message_id:
+        raise HTTPException(status_code=400, detail="provider_message_id is required.")
+
+    rows = _list_user_accounts(user_email)
+    target_account = _scope_account_to_session(rows, account_email)
+
+    dry_run = _load_dry_run_row(target_account["account_id"], provider_message_id)
+    if not dry_run:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No dry-run classification exists for that message. "
+                "Run /mail/inbox/classify-dryrun first."
+            ),
+        )
+
+    canonical_target = _resolve_target_folder_canonical(requested_target, dry_run)
+
+    access_token, account_record = await _graph_access_token_for_email(target_account["email"])
+    destination_provider_folder_id = await _resolve_provider_folder_id(
+        access_token, canonical_target
+    )
+
+    try:
+        moved = await _graph_post(
+            access_token,
+            f"/me/messages/{provider_message_id}/move",
+            {"destinationId": destination_provider_folder_id},
+        )
+    except HTTPException as exc:
+        # Persist the failure so the audit trail reflects the attempt
+        # before re-raising the original 502 to the caller.
+        action_error = (
+            exc.detail
+            if isinstance(exc.detail, str)
+            else json.dumps(exc.detail, default=str)
+        )
+        _record_dry_run_move(
+            account_id=target_account["account_id"],
+            provider_message_id=provider_message_id,
+            status="move_failed",
+            executed_to_folder=canonical_target,
+            executed_provider_folder_id=destination_provider_folder_id,
+            executed_provider_message_id=None,
+            action_error=action_error[:1000] if isinstance(action_error, str) else None,
+        )
+        raise
+
+    new_provider_message_id = str(moved.get("id") or "") or None
+
+    _record_dry_run_move(
+        account_id=target_account["account_id"],
+        provider_message_id=provider_message_id,
+        status="moved",
+        executed_to_folder=canonical_target,
+        executed_provider_folder_id=destination_provider_folder_id,
+        executed_provider_message_id=new_provider_message_id,
+        action_error=None,
+    )
+
+    logger.info(
+        "inbox.dryrun.move account=%s provider_message_id=%s target=%s",
+        account_record["email"],
+        provider_message_id,
+        canonical_target,
+    )
+
+    return {
+        "destructive": False,
+        "moved": True,
+        "account": {
+            "email": account_record["email"],
+            "display_name": account_record["display_name"],
+        },
+        "provider_message_id": provider_message_id,
+        "new_provider_message_id": new_provider_message_id,
+        "target_folder": canonical_target,
+        "destination_provider_folder_id": destination_provider_folder_id,
+        "forced_review_applied": bool(
+            dry_run.get("forced_review") or dry_run.get("safety_flags")
+        ),
         "review_folder": classifier_module.REVIEW_FOLDER,
     }
 
