@@ -153,11 +153,19 @@ jobs:
               # latestRevision==True; either case means our revision is
               # the active traffic target at 100%.
               WEIGHT=$(printf '%s' "${TRAFFIC}" | REV="${REVISION}" python3 -c 'import os,sys,json; rev=os.environ["REV"]; data=json.load(sys.stdin) or []; m=[(i.get("weight") or 0) for i in data if i.get("latestRevision") or i.get("revisionName")==rev]; print(m[0] if m else 0)')
-              if [ "${PROV}" = "Provisioned" ] && [ "${RUN}" = "Running" ] && [ "${ACTIVE}" = "True" ] && [ "${WEIGHT}" = "100" ]; then
-                echo "Revision ${REVISION} is active with 100% traffic."
+              # Azure reports several healthy "Running*" runningState values
+              # (Running, RunningAtMaxScale, etc.) depending on scale-rule
+              # state. They all mean the revision is up and serving — only
+              # the explicit failure states should fail the wait.
+              case "${RUN}" in
+                Running*) RUN_OK=1 ;;
+                *) RUN_OK=0 ;;
+              esac
+              if [ "${PROV}" = "Provisioned" ] && [ "${RUN_OK}" = "1" ] && [ "${ACTIVE}" = "True" ] && [ "${WEIGHT}" = "100" ]; then
+                echo "Revision ${REVISION} is active with 100% traffic (runningState=${RUN})."
                 break
               fi
-              if [ "${PROV}" = "Failed" ] || [ "${RUN}" = "Failed" ]; then
+              if [ "${PROV}" = "Failed" ] || [ "${RUN}" = "Failed" ] || [ "${RUN}" = "Degraded" ]; then
                 echo "Revision ${REVISION} entered a failed state." >&2
                 az containerapp revision show \
                   --name "${{ env.CONTAINER_APP_NAME }}" \
