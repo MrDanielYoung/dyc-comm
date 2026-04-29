@@ -516,7 +516,7 @@ async def _call_azure_classifier(
     request_payload = {
         "messages": _provider_messages(payload),
         "temperature": 0,
-        "max_tokens": 400,
+        "max_completion_tokens": 400,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
