@@ -733,6 +733,41 @@ def _ensure_account_tables() -> None:
                 ON inbox_dry_run_classification(account_email, created_at DESC)
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mailbox_move_action (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    account_email TEXT NOT NULL,
+                    provider_message_id TEXT NOT NULL,
+                    source_folder_id TEXT,
+                    destination_folder_id TEXT,
+                    destination_folder_name TEXT NOT NULL,
+                    dry_run_classification_id TEXT
+                        REFERENCES inbox_dry_run_classification(id) ON DELETE SET NULL,
+                    forced_review BOOLEAN NOT NULL DEFAULT false,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error TEXT,
+                    requested_by_email TEXT NOT NULL,
+                    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    completed_at TIMESTAMPTZ
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_mailbox_move_action_account_requested
+                ON mailbox_move_action(account_id, requested_at DESC)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                    idx_mailbox_move_action_account_message_status
+                ON mailbox_move_action(account_id, provider_message_id, status)
+                """
+            )
         connection.commit()
 
     _DB_BOOTSTRAPPED = True
@@ -1824,6 +1859,8 @@ def activity_log(
 
     folder_events: list[dict[str, Any]] = []
     folder_available = False
+    move_events: list[dict[str, Any]] = []
+    move_available = False
     for row in scoped_rows:
         events = _load_folder_activity(row["account_id"], limit=limit)
         for event in events:
@@ -1834,11 +1871,42 @@ def activity_log(
             folder_events.append(event)
         folder_available = True
 
+        for action in _load_move_actions(row["account_id"], limit=limit):
+            move_events.append(
+                {
+                    "event_type": f"message.move.{action['status']}",
+                    "occurred_at": action["completed_at"] or action["requested_at"],
+                    "account": {
+                        "account_id": row["account_id"],
+                        "email": row["email"],
+                    },
+                    "move": {
+                        "provider_message_id": action["provider_message_id"],
+                        "source_folder_id": action["source_folder_id"],
+                        "destination_folder_id": action["destination_folder_id"],
+                        "destination_folder_name": action["destination_folder_name"],
+                        "forced_review": action["forced_review"],
+                        "status": action["status"],
+                        "error": action["error"],
+                        "requested_by_email": action["requested_by_email"],
+                        "requested_at": action["requested_at"],
+                        "completed_at": action["completed_at"],
+                    },
+                }
+            )
+        move_available = True
+
     folder_events.sort(
         key=lambda event: event.get("occurred_at") or "",
         reverse=True,
     )
     folder_events = folder_events[:limit]
+
+    move_events.sort(
+        key=lambda event: event.get("occurred_at") or "",
+        reverse=True,
+    )
+    move_events = move_events[:limit]
 
     folder_reason: str | None = None
     if not folder_available:
@@ -1846,6 +1914,16 @@ def activity_log(
             "No connected_account rows for this session; folder activity "
             "becomes available once accounts are persisted via the OAuth "
             "callback with DATABASE_URL configured."
+        )
+
+    move_reason: str | None = None
+    if not move_available:
+        move_reason = PENDING_REASON_MESSAGE_MOVEMENT
+    elif not move_events:
+        move_reason = (
+            "No approved-move actions have been recorded yet for this "
+            "account. Use the Move action on the Inbox Sorting tab after "
+            "running the dry-run to populate this feed."
         )
 
     return {
@@ -1858,13 +1936,20 @@ def activity_log(
             "events": folder_events,
         },
         "message_movement": {
-            "available": False,
-            "reason": PENDING_REASON_MESSAGE_MOVEMENT,
-            "events": [],
+            "available": move_available,
+            "reason": move_reason,
+            "events": move_events,
         },
-        "pending_instrumentation": [
-            {"metric": "message_movement", "reason": PENDING_REASON_MESSAGE_MOVEMENT},
-        ],
+        "pending_instrumentation": (
+            []
+            if move_available
+            else [
+                {
+                    "metric": "message_movement",
+                    "reason": PENDING_REASON_MESSAGE_MOVEMENT,
+                }
+            ]
+        ),
     }
 
 
@@ -2427,6 +2512,522 @@ def classify_inbox_dryrun_log(
         "count": len(entries),
         "entries": entries,
         "review_folder": classifier_module.REVIEW_FOLDER,
+    }
+
+
+# =========================================================================
+# Approved inbox-move action
+# =========================================================================
+#
+# This is the first slice that ACTUALLY MUTATES the mailbox. It is gated
+# by a hard contract:
+#
+# * Only the connected account's session can request a move (account
+#   scoping is enforced exactly like the dry-run endpoints).
+# * Each requested message must already have a persisted dry-run row —
+#   no "blind moves". The dry-run row provides the recommended folder
+#   and the forced_review flag the safety pass enforces.
+# * forced_review messages and any message whose recommendation is
+#   already 10 - Review go to 10 - Review only — never to a business
+#   folder, regardless of operator pressure.
+# * The Graph endpoint used is POST /me/messages/{id}/move. There is no
+#   delete, no send, no archive. v1 explicitly excludes those.
+# * Every attempt persists a mailbox_move_action row (succeeded /
+#   failed / skipped) so the activity log can render an honest history.
+# * Re-issuing a move for a message that has a recent succeeded row is
+#   a no-op (idempotent; we return the existing row's metadata).
+
+INBOX_MOVE_MAX_BATCH = 25
+
+
+def _resolve_target_folder_id(
+    account_id: str, recommended_folder: str
+) -> tuple[str | None, str]:
+    """Resolve a folder name to its provider folder id from the persisted inventory.
+
+    Returns ``(provider_folder_id_or_None, canonical_name)``. If the folder
+    has not been inventoried yet (typical when the operator forgot to run
+    Bootstrap), the caller falls back to ``10 - Review`` for forced-review
+    cases, or refuses the move and asks the operator to bootstrap.
+    """
+    target_name = recommended_folder or classifier_module.REVIEW_FOLDER
+    folders = _load_folder_inventory(account_id)
+    folded = _fold_name(target_name)
+    for folder in folders:
+        canonical = folder.get("canonical_name") or folder.get("displayName") or ""
+        if _fold_name(canonical) == folded:
+            return folder.get("id"), canonical
+        if _fold_name(folder.get("displayName") or "") == folded:
+            return folder.get("id"), canonical or folder.get("displayName") or target_name
+    return None, target_name
+
+
+def _load_dry_run_row(
+    account_id: str, provider_message_id: str
+) -> dict[str, Any] | None:
+    if not _database_url():
+        return None
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        provider_message_id,
+                        recommended_folder,
+                        forced_review,
+                        category,
+                        confidence,
+                        confidence_band,
+                        current_folder
+                    FROM inbox_dry_run_classification
+                    WHERE account_id = %s AND provider_message_id = %s
+                    LIMIT 1
+                    """,
+                    (account_id, provider_message_id),
+                )
+                row = cursor.fetchone()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load dry-run classification row from PostgreSQL.",
+        ) from exc
+
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "provider_message_id": row[1],
+        "recommended_folder": row[2],
+        "forced_review": bool(row[3]),
+        "category": row[4],
+        "confidence": float(row[5]) if row[5] is not None else 0.0,
+        "confidence_band": row[6],
+        "current_folder": row[7],
+    }
+
+
+def _existing_succeeded_move(
+    account_id: str, provider_message_id: str
+) -> dict[str, Any] | None:
+    if not _database_url():
+        return None
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        destination_folder_id,
+                        destination_folder_name,
+                        forced_review,
+                        completed_at
+                    FROM mailbox_move_action
+                    WHERE account_id = %s
+                      AND provider_message_id = %s
+                      AND status = 'succeeded'
+                    ORDER BY requested_at DESC
+                    LIMIT 1
+                    """,
+                    (account_id, provider_message_id),
+                )
+                row = cursor.fetchone()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to look up prior mailbox_move_action rows.",
+        ) from exc
+
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "destination_folder_id": row[1],
+        "destination_folder_name": row[2],
+        "forced_review": bool(row[3]),
+        "completed_at": row[4].isoformat() if row[4] else None,
+    }
+
+
+def _persist_move_action(
+    account_id: str,
+    account_email: str,
+    requested_by_email: str,
+    provider_message_id: str,
+    source_folder_id: str | None,
+    destination_folder_id: str | None,
+    destination_folder_name: str,
+    dry_run_classification_id: str | None,
+    forced_review: bool,
+    status: str,
+    error: str | None,
+    completed: bool,
+) -> str:
+    """Insert a mailbox_move_action row. Returns the new row id."""
+    action_id = str(uuid.uuid4())
+    if not _database_url():
+        return action_id
+
+    psycopg = _psycopg()
+    _ensure_account_tables()
+
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO mailbox_move_action (
+                        id,
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        source_folder_id,
+                        destination_folder_id,
+                        destination_folder_name,
+                        dry_run_classification_id,
+                        forced_review,
+                        status,
+                        error,
+                        requested_by_email,
+                        completed_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            CASE WHEN %s THEN now() ELSE NULL END)
+                    """,
+                    (
+                        action_id,
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        source_folder_id,
+                        destination_folder_id,
+                        destination_folder_name,
+                        dry_run_classification_id,
+                        forced_review,
+                        status,
+                        error,
+                        requested_by_email,
+                        completed,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist mailbox_move_action row to PostgreSQL.",
+        ) from exc
+
+    return action_id
+
+
+async def _graph_move_message(
+    access_token: str, provider_message_id: str, destination_folder_id: str
+) -> dict[str, Any]:
+    """Microsoft Graph: POST /me/messages/{id}/move with destinationId."""
+    return await _graph_post(
+        access_token,
+        f"/me/messages/{provider_message_id}/move",
+        {"destinationId": destination_folder_id},
+    )
+
+
+def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+
+    _ensure_account_tables()
+
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        provider_message_id,
+                        account_email,
+                        source_folder_id,
+                        destination_folder_id,
+                        destination_folder_name,
+                        forced_review,
+                        status,
+                        error,
+                        requested_by_email,
+                        requested_at,
+                        completed_at
+                    FROM mailbox_move_action
+                    WHERE account_id = %s
+                    ORDER BY requested_at DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to load mailbox_move_action rows from PostgreSQL.",
+        ) from exc
+
+    return [
+        {
+            "provider_message_id": row[0],
+            "account_email": row[1],
+            "source_folder_id": row[2],
+            "destination_folder_id": row[3],
+            "destination_folder_name": row[4],
+            "forced_review": bool(row[5]),
+            "status": row[6],
+            "error": row[7],
+            "requested_by_email": row[8],
+            "requested_at": row[9].isoformat() if row[9] else None,
+            "completed_at": row[10].isoformat() if row[10] else None,
+        }
+        for row in rows
+    ]
+
+
+@app.post("/mail/inbox/move")
+async def move_inbox_messages(
+    request: Request,
+    account: str = Query(..., description="Connected account email."),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Move one or more dry-run-classified messages to the recommended folder.
+
+    Required body shape:
+
+    .. code-block:: json
+
+        {"provider_message_ids": ["AAMk...=", "AAMk...="]}
+
+    Safety contract:
+
+    * The session must be authenticated (``dyc_account_email`` cookie).
+    * ``account`` must match an account already linked to the session.
+    * Each ``provider_message_id`` must already have a persisted dry-run
+      row for this account — otherwise that id is rejected as
+      ``no_dry_run_row`` and no Graph call is made.
+    * The destination folder is taken from the dry-run row's
+      ``recommended_folder``. ``forced_review`` rows (and any rows whose
+      recommendation is already ``10 - Review``) move only to
+      ``10 - Review`` — never to a business folder, regardless of
+      caller pressure.
+    * The mailbox folder inventory must contain the destination folder
+      (run ``/mail/folders/bootstrap`` first if not). Without it the
+      target id cannot be resolved and the per-message attempt is
+      recorded as ``status: skipped`` with reason
+      ``destination_folder_not_inventoried``.
+    * If a recent ``mailbox_move_action`` row already shows ``succeeded``
+      for the same ``(account_id, provider_message_id)``, the request is
+      idempotent: we return the existing row's destination metadata and
+      skip the Graph call.
+    * v1 never deletes or sends mail. This endpoint only moves.
+    """
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    target = _scope_account_to_session(rows, account)
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be an object.")
+    raw_ids = body.get("provider_message_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="provider_message_ids must be a non-empty array of message ids.",
+        )
+    if len(raw_ids) > INBOX_MOVE_MAX_BATCH:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Too many message ids in one request "
+                f"(max {INBOX_MOVE_MAX_BATCH})."
+            ),
+        )
+
+    provider_message_ids: list[str] = []
+    for value in raw_ids:
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Each provider_message_id must be a non-empty string.",
+            )
+        provider_message_ids.append(value.strip())
+
+    access_token, account_record = await _graph_access_token_for_email(target["email"])
+    account_id = account_record["account_id"]
+    account_email = account_record["email"]
+
+    results: list[dict[str, Any]] = []
+    for provider_message_id in provider_message_ids:
+        # Idempotency: if a prior succeeded move exists, return that and
+        # skip the Graph call.
+        existing = _existing_succeeded_move(account_id, provider_message_id)
+        if existing:
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "already_moved",
+                    "destination_folder_id": existing["destination_folder_id"],
+                    "destination_folder_name": existing["destination_folder_name"],
+                    "forced_review": existing["forced_review"],
+                    "completed_at": existing["completed_at"],
+                }
+            )
+            continue
+
+        dry_run_row = _load_dry_run_row(account_id, provider_message_id)
+        if not dry_run_row:
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=None,
+                destination_folder_id=None,
+                destination_folder_name=classifier_module.REVIEW_FOLDER,
+                dry_run_classification_id=None,
+                forced_review=False,
+                status="rejected",
+                error="no_dry_run_row",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "rejected",
+                    "error": "no_dry_run_row",
+                    "destination_folder_name": None,
+                }
+            )
+            continue
+
+        # Safety pass: forced_review messages, or messages whose
+        # recommendation is already 10 - Review, MUST go to 10 - Review.
+        # Anything else is allowed to follow the recommendation.
+        recommended = dry_run_row["recommended_folder"] or classifier_module.REVIEW_FOLDER
+        forced = bool(dry_run_row["forced_review"])
+        if forced or recommended == classifier_module.REVIEW_FOLDER:
+            target_name = classifier_module.REVIEW_FOLDER
+            forced = True
+        else:
+            target_name = recommended
+
+        destination_folder_id, resolved_name = _resolve_target_folder_id(
+            account_id, target_name
+        )
+        if not destination_folder_id:
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=dry_run_row.get("current_folder"),
+                destination_folder_id=None,
+                destination_folder_name=target_name,
+                dry_run_classification_id=dry_run_row["id"],
+                forced_review=forced,
+                status="skipped",
+                error="destination_folder_not_inventoried",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "skipped",
+                    "error": "destination_folder_not_inventoried",
+                    "destination_folder_name": target_name,
+                    "forced_review": forced,
+                }
+            )
+            continue
+
+        try:
+            await _graph_move_message(
+                access_token, provider_message_id, destination_folder_id
+            )
+        except HTTPException as exc:
+            detail = exc.detail
+            error_message = (
+                detail.get("message")
+                if isinstance(detail, dict)
+                else str(detail)
+            )
+            _persist_move_action(
+                account_id=account_id,
+                account_email=account_email,
+                requested_by_email=user_email,
+                provider_message_id=provider_message_id,
+                source_folder_id=dry_run_row.get("current_folder"),
+                destination_folder_id=destination_folder_id,
+                destination_folder_name=resolved_name or target_name,
+                dry_run_classification_id=dry_run_row["id"],
+                forced_review=forced,
+                status="failed",
+                error=error_message or "graph_move_failed",
+                completed=False,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "failed",
+                    "error": error_message or "graph_move_failed",
+                    "destination_folder_id": destination_folder_id,
+                    "destination_folder_name": resolved_name or target_name,
+                    "forced_review": forced,
+                }
+            )
+            continue
+
+        _persist_move_action(
+            account_id=account_id,
+            account_email=account_email,
+            requested_by_email=user_email,
+            provider_message_id=provider_message_id,
+            source_folder_id=dry_run_row.get("current_folder"),
+            destination_folder_id=destination_folder_id,
+            destination_folder_name=resolved_name or target_name,
+            dry_run_classification_id=dry_run_row["id"],
+            forced_review=forced,
+            status="succeeded",
+            error=None,
+            completed=True,
+        )
+        results.append(
+            {
+                "provider_message_id": provider_message_id,
+                "status": "succeeded",
+                "destination_folder_id": destination_folder_id,
+                "destination_folder_name": resolved_name or target_name,
+                "forced_review": forced,
+            }
+        )
+
+    return {
+        "account": {
+            "email": account_email,
+            "display_name": account_record["display_name"],
+        },
+        "requested": len(provider_message_ids),
+        "succeeded": sum(1 for r in results if r["status"] == "succeeded"),
+        "already_moved": sum(1 for r in results if r["status"] == "already_moved"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "failed": sum(1 for r in results if r["status"] == "failed"),
+        "rejected": sum(1 for r in results if r["status"] == "rejected"),
+        "review_folder": classifier_module.REVIEW_FOLDER,
+        "results": results,
     }
 
 
