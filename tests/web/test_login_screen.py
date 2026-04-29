@@ -81,15 +81,10 @@ def _extract_decide_session_action(html: str) -> str:
 
 
 def _run_node(js: str) -> dict:
-    if shutil.which("node") is None:  # pragma: no cover - depends on CI image
+    if shutil.which("node") is None:
         pytest.skip("node runtime not available")
     result = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=10)
-    if result.returncode != 0:
-        raise AssertionError(
-            f"node failed (rc={result.returncode}):\n"
-            f"STDOUT:\n{result.stdout}\n"
-            f"STDERR:\n{result.stderr}"
-        )
+    assert result.returncode == 0, f"node failed: {result.stderr}"
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
@@ -292,15 +287,18 @@ def test_signout_sets_suppress_flag():
     assert "suppressInitialRedirect = true" in signout_block
 
 
-def test_retry_and_refresh_handlers_set_suppress_flag():
+def test_retry_handler_sets_suppress_flag():
     html = _read_html()
-    # Both gateRetryButton and refreshButton handlers must mark the
-    # session as user-driven before re-evaluating.
-    for handler in ("gateRetryButton.addEventListener", "refreshButton.addEventListener"):
-        block = html.split(handler, 1)[1].split("addEventListener", 1)[0]
-        assert "suppressInitialRedirect = true" in block, (
-            f"{handler} should set suppressInitialRedirect before evaluateSession"
-        )
+    block = html.split("gateRetryButton.addEventListener", 1)[1]
+    block = block.split("addEventListener", 1)[0]
+    assert "suppressInitialRedirect = true" in block
+
+
+def test_refresh_handler_sets_suppress_flag():
+    html = _read_html()
+    block = html.split("refreshButton.addEventListener", 1)[1]
+    block = block.split("addEventListener", 1)[0]
+    assert "suppressInitialRedirect = true" in block
 
 
 def test_initial_page_load_calls_evaluate_session():
