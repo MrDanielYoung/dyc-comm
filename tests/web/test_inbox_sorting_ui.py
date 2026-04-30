@@ -249,8 +249,17 @@ def test_safe_automation_control_lives_under_diagnostics():
 def test_category_bootstrap_control_lives_under_diagnostics():
     html = _read_html()
     assert 'id="categoryBootstrapButton"' in html
-    assert "<strong>Category Bootstrap</strong>" in html
+    assert "<strong>Bootstrap labels</strong>" in html
     assert "/mail/categories/bootstrap" in html
+    assert 'accountScopedPath("/mail/categories/bootstrap")' in html
+
+
+def test_folder_bootstrap_control_lives_under_diagnostics():
+    html = _read_html()
+    assert 'id="bootstrapButton"' in html
+    assert "<strong>Bootstrap folders</strong>" in html
+    assert "/mail/folders/bootstrap" in html
+    assert 'accountScopedPath("/mail/folders/bootstrap")' in html
 
 
 def test_sorting_panel_shows_automation_active_state():

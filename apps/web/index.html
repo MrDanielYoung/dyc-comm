@@ -2078,12 +2078,12 @@
                         <span>POST `/mail/folders/inventory/sync`</span>
                       </button>
                       <button class="endpoint-button" id="bootstrapButton" type="button" disabled>
-                        <strong>Bootstrap</strong>
-                        <span>POST `/mail/folders/bootstrap`</span>
+                        <strong>Bootstrap folders</strong>
+                        <span>Create missing managed folders for the selected account</span>
                       </button>
                       <button class="endpoint-button" id="categoryBootstrapButton" type="button" disabled>
-                        <strong>Category Bootstrap</strong>
-                        <span>POST `/mail/categories/bootstrap`</span>
+                        <strong>Bootstrap labels</strong>
+                        <span>Create Outlook categories for the selected account</span>
                       </button>
                       <button class="endpoint-button" id="diagnosticDryRunButton" type="button" disabled>
                         <strong>Dry-run classify</strong>
@@ -2248,6 +2248,27 @@
         return Boolean(entry && entry.mailbox_access_ready);
       }
 
+      function accountScopedPath(path) {
+        const email = accountState.selectedEmail;
+        if (!email) return path;
+        const separator = path.includes("?") ? "&" : "?";
+        return `${path}${separator}account=${encodeURIComponent(email)}`;
+      }
+
+      function applyEndpointReadinessUI() {
+        const ready = selectedAccountIsMailboxReady();
+        foldersButton.disabled = !ready;
+        inventorySyncButton.disabled = !ready;
+        bootstrapButton.disabled = !ready;
+        categoryBootstrapButton.disabled = !ready;
+        if (diagnosticDryRunButton) {
+          diagnosticDryRunButton.disabled = !ready;
+        }
+        if (diagnosticAutomationButton) {
+          diagnosticAutomationButton.disabled = !ready;
+        }
+      }
+
       function applySortingReadinessUI() {
         const entry = selectedAccountEntry();
         const email = entry ? entry.email : null;
@@ -2263,12 +2284,7 @@
         if (sortingRefreshButton) {
           sortingRefreshButton.disabled = !hasSelection;
         }
-        if (diagnosticDryRunButton) {
-          diagnosticDryRunButton.disabled = !ready;
-        }
-        if (diagnosticAutomationButton) {
-          diagnosticAutomationButton.disabled = !ready;
-        }
+        applyEndpointReadinessUI();
 
         if (dashboardSortingSetupNotice) {
           dashboardSortingSetupNotice.hidden = !hasSelection || ready;
@@ -2405,12 +2421,8 @@
       }
 
       function enableMailboxActions(payload) {
-        const mailboxReady = Boolean(payload.linked_account) && Boolean(payload.mailbox_access_ready);
         sessionButton.disabled = false;
-        foldersButton.disabled = !mailboxReady;
-        inventorySyncButton.disabled = !mailboxReady;
-        bootstrapButton.disabled = !mailboxReady;
-        categoryBootstrapButton.disabled = !mailboxReady;
+        applyEndpointReadinessUI();
       }
 
       function renderFolderBucket(element, folders, emptyText) {
@@ -3644,23 +3656,27 @@
       }
       sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
       foldersButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Folders", "/mail/folders");
+        const payload = await safeCallApi("Folders", accountScopedPath("/mail/folders"));
         if (payload) renderFolders(payload.folders || []);
       });
       inventorySyncButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Inventory sync", "/mail/folders/inventory/sync", {
+        const payload = await safeCallApi("Inventory sync", accountScopedPath("/mail/folders/inventory/sync"), {
           method: "POST"
         });
         if (payload) renderFolders(payload.folders || []);
+        await loadAccounts();
+        await loadAlerts();
       });
       bootstrapButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Bootstrap", "/mail/folders/bootstrap", {
+        const payload = await safeCallApi("Bootstrap folders", accountScopedPath("/mail/folders/bootstrap"), {
           method: "POST"
         });
         if (payload) renderFolders(payload.ensured_folders || []);
+        await loadAccounts();
+        await loadAlerts();
       });
       categoryBootstrapButton.addEventListener("click", () => {
-        safeCallApi("Category bootstrap", "/mail/categories/bootstrap", {
+        safeCallApi("Bootstrap labels", accountScopedPath("/mail/categories/bootstrap"), {
           method: "POST"
         });
       });

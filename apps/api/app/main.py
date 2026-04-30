@@ -1611,12 +1611,17 @@ def auth_logout() -> Response:
 @app.get("/mail/folders")
 async def mail_folders(
     include_hidden: bool = Query(default=False),
+    account: str | None = Query(
+        default=None,
+        description="Optional connected account email. Defaults to the signed-in mailbox.",
+    ),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     if not linked_email:
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
-    access_token, account = await _graph_access_token_for_email(linked_email)
+    target_email = _resolve_mailbox_action_email(linked_email, account)
+    access_token, account = await _graph_access_token_for_email(target_email)
     folders = _annotate_folders(
         await _list_mail_folders(access_token, include_hidden=include_hidden)
     )
@@ -1631,12 +1636,17 @@ async def mail_folders(
 
 @app.post("/mail/folders/bootstrap")
 async def bootstrap_mail_folders(
+    account: str | None = Query(
+        default=None,
+        description="Optional connected account email. Defaults to the signed-in mailbox.",
+    ),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     if not linked_email:
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
-    access_token, account = await _graph_access_token_for_email(linked_email)
+    target_email = _resolve_mailbox_action_email(linked_email, account)
+    access_token, account = await _graph_access_token_for_email(target_email)
     folders = _annotate_folders(await _ensure_default_mail_folders(access_token))
     _persist_folder_inventory(account["account_id"], folders)
     return {
@@ -1713,12 +1723,17 @@ async def bootstrap_outlook_categories(
 @app.post("/mail/folders/inventory/sync")
 async def sync_mail_folder_inventory(
     include_hidden: bool = Query(default=True),
+    account: str | None = Query(
+        default=None,
+        description="Optional connected account email. Defaults to the signed-in mailbox.",
+    ),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     if not linked_email:
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
-    access_token, account = await _graph_access_token_for_email(linked_email)
+    target_email = _resolve_mailbox_action_email(linked_email, account)
+    access_token, account = await _graph_access_token_for_email(target_email)
     folders = _annotate_folders(
         await _list_mail_folders(access_token, include_hidden=include_hidden)
     )
@@ -1734,12 +1749,17 @@ async def sync_mail_folder_inventory(
 
 @app.get("/mail/folders/inventory")
 async def mail_folder_inventory(
+    account: str | None = Query(
+        default=None,
+        description="Optional connected account email. Defaults to the signed-in mailbox.",
+    ),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     if not linked_email:
         raise HTTPException(status_code=401, detail="No linked account session found.")
 
-    account = _load_account_credentials(linked_email)
+    target_email = _resolve_mailbox_action_email(linked_email, account)
+    account = _load_account_credentials(target_email)
     folders = _load_folder_inventory(account["account_id"])
     return {
         "account": {
@@ -2535,6 +2555,17 @@ def _scope_account_to_session(rows: list[dict[str, Any]], requested_email: str) 
             detail="No connected account with that email is linked to this session.",
         )
     return target
+
+
+def _resolve_mailbox_action_email(linked_email: str, requested_email: str | None) -> str:
+    """Resolve an optional account query param within the current session scope."""
+    if not requested_email:
+        return linked_email
+
+    user_email = _resolve_session_user_email(linked_email)
+    rows = _list_user_accounts(user_email)
+    target = _scope_account_to_session(rows, requested_email)
+    return target["email"]
 
 
 async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, Any]]:
