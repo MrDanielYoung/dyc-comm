@@ -1017,7 +1017,7 @@
 
       .sorting-table {
         width: 100%;
-        min-width: 1180px;
+        min-width: 1540px;
         border-collapse: collapse;
         font-size: 0.82rem;
         background: rgba(255, 255, 255, 0.92);
@@ -1026,37 +1026,37 @@
 
       .sorting-table th:nth-child(1),
       .sorting-table td:nth-child(1) {
-        width: 118px;
+        width: 130px;
       }
 
       .sorting-table th:nth-child(2),
       .sorting-table td:nth-child(2) {
-        width: 270px;
+        width: 320px;
       }
 
       .sorting-table th:nth-child(3),
       .sorting-table td:nth-child(3) {
-        width: 170px;
+        width: 190px;
       }
 
       .sorting-table th:nth-child(4),
       .sorting-table td:nth-child(4) {
-        width: 110px;
+        width: 120px;
       }
 
       .sorting-table th:nth-child(5),
       .sorting-table td:nth-child(5) {
-        width: 300px;
+        width: 560px;
       }
 
       .sorting-table th:nth-child(6),
       .sorting-table td:nth-child(6) {
-        width: 105px;
+        width: 130px;
       }
 
       .sorting-table th:nth-child(7),
       .sorting-table td:nth-child(7) {
-        width: 150px;
+        width: 180px;
       }
 
       .sorting-table th,
@@ -1065,6 +1065,10 @@
         text-align: left;
         border-bottom: 1px solid var(--line);
         vertical-align: top;
+        min-width: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: normal;
       }
 
       .sorting-table th {
@@ -1086,11 +1090,17 @@
         font-size: 0.78rem;
         color: var(--muted);
         line-height: 1.45;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
 
       .sorting-table .reasons-list li,
       .sorting-table .flags-list li {
         margin: 0;
+        max-width: 100%;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
 
       .sorting-table .review-tag {
@@ -1212,22 +1222,26 @@
 
       .health-dot {
         flex: 0 0 auto;
-        width: 12px;
-        height: 12px;
+        width: 14px;
+        height: 14px;
         border-radius: 999px;
-        border: 1px solid rgba(23, 22, 27, 0.18);
+        border: 2px solid rgba(23, 22, 27, 0.28);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
       }
 
       .health-dot.green {
-        background: #1d7f46;
+        background: #00a651;
+        border-color: #007a3d;
       }
 
       .health-dot.yellow {
-        background: #d39a1f;
+        background: #ffd400;
+        border-color: #b88900;
       }
 
       .health-dot.red {
-        background: #b53a2c;
+        background: #e60000;
+        border-color: #a30000;
       }
 
       .account-nav-button .account-nav-meta {
@@ -1632,51 +1646,6 @@
             </aside>
             <div class="app-main">
           <div class="shell">
-            <section class="layout">
-              <section class="panel connect-panel">
-                <div class="eyebrow">Microsoft 365</div>
-                <h1>Mailbox console</h1>
-                <div class="action-row">
-                  <button class="secondary" id="refreshButton" type="button">Refresh</button>
-                </div>
-                <p class="notice" id="authNotice">
-                  Sign-in status and runtime errors appear here.
-                </p>
-                <div class="info-grid">
-                  <div class="info-item">
-                    <p class="label">Linked account</p>
-                    <p class="value" id="linkedEmail">—</p>
-                  </div>
-                  <div class="info-item">
-                    <p class="label">Mailbox access</p>
-                    <p class="value" id="mailboxAccess">—</p>
-                  </div>
-                  <div class="info-item">
-                    <p class="label">API base</p>
-                    <p class="value"><code id="apiBaseText"></code></p>
-                  </div>
-                </div>
-              </section>
-
-              <aside class="panel status-panel">
-                <span class="status-chip idle" id="statusChip">Checking connection state</span>
-                <h2 class="status-title">Current session</h2>
-                <p class="status-copy">
-                  Browser session state and backend readiness.
-                </p>
-                <div class="meta-grid">
-                  <div class="meta-card">
-                    <p class="label">Display name</p>
-                    <p class="value" id="linkedName">—</p>
-                  </div>
-                  <div class="meta-card">
-                    <p class="label">Session state</p>
-                    <p class="value" id="sessionState">Checking</p>
-                  </div>
-                </div>
-              </aside>
-            </section>
-
             <div class="tabpanels">
               <section
                 role="tabpanel"
@@ -2050,7 +2019,17 @@
                 <div class="shell">
                   <section class="panel section-panel" data-testid="api-panel">
                     <h2 class="section-title">Runtime readiness</h2>
+                    <div class="action-row">
+                      <button class="secondary" id="refreshButton" type="button">Refresh session</button>
+                    </div>
+                    <p class="notice" id="authNotice">
+                      Sign-in status and runtime errors appear here.
+                    </p>
                     <div class="readiness-list">
+                      <div class="readiness-item">
+                        <span class="readiness-label">API base</span>
+                        <span class="readiness-value"><code id="apiBaseText"></code></span>
+                      </div>
                       <div class="readiness-item">
                         <span class="readiness-label">API reachability</span>
                         <span class="readiness-value" id="apiReachability">Checking</span>
@@ -2167,10 +2146,6 @@
       const headerAccountValue = document.getElementById("headerAccountValue");
       const authNotice = document.getElementById("authNotice");
       const statusChip = document.getElementById("statusChip");
-      const linkedEmail = document.getElementById("linkedEmail");
-      const linkedName = document.getElementById("linkedName");
-      const mailboxAccess = document.getElementById("mailboxAccess");
-      const sessionState = document.getElementById("sessionState");
       const apiBaseText = document.getElementById("apiBaseText");
       const apiReachability = document.getElementById("apiReachability");
       const oauthReadiness = document.getElementById("oauthReadiness");
@@ -2285,7 +2260,7 @@
         }
       }
 
-      apiBaseText.textContent = API_BASE;
+      if (apiBaseText) apiBaseText.textContent = API_BASE;
       gateConnectLink.href = PRIMARY_SIGN_IN_URL;
       headerSignInLink.href = PRIMARY_SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
@@ -2358,14 +2333,10 @@
       }
 
       function setStatus(isConnected, email, name, isMailboxReady) {
-        statusChip.className = `status-chip ${isConnected ? "connected" : "idle"}`;
-        statusChip.textContent = isConnected ? "Microsoft account linked" : "Awaiting Microsoft account";
-        linkedEmail.textContent = email || "—";
-        linkedName.textContent = name || "—";
-        mailboxAccess.textContent = isConnected
-          ? (isMailboxReady ? "Ready for mailbox calls" : "Linked, awaiting runtime")
-          : "—";
-        sessionState.textContent = isConnected ? "Connected" : "Not connected";
+        if (statusChip) {
+          statusChip.className = `status-chip ${isConnected ? "connected" : "idle"}`;
+          statusChip.textContent = isConnected ? "Microsoft account linked" : "Awaiting Microsoft account";
+        }
       }
 
       function setReadiness(element, isReady, readyText = "Ready", missingText = "Pending") {

@@ -67,8 +67,10 @@ def test_sorting_table_columns_cover_all_classifier_signals():
 
 def test_sorting_table_uses_readable_layout_and_24_hour_time():
     html = _read_html()
-    assert "min-width: 1180px" in html
+    assert "min-width: 1540px" in html
     assert "table-layout: fixed" in html
+    assert "overflow-wrap: anywhere" in html
+    assert "width: 560px" in html
     assert "hour12: false" in html
 
 
@@ -153,6 +155,23 @@ def test_account_nav_supports_multi_account_selection():
     assert "function selectAccount(email)" in html
     # Sorting log + dashboard reload on account switch.
     assert "loadSortingLog().catch" in html
+
+
+def test_account_health_uses_primary_stoplight_colors():
+    html = _read_html()
+    assert "background: #00a651" in html
+    assert "background: #ffd400" in html
+    assert "background: #e60000" in html
+
+
+def test_dashboard_removes_low_value_session_panels():
+    html = _read_html()
+    assert "Mailbox console" not in html
+    assert "Current session" not in html
+    assert 'id="linkedEmail"' not in html
+    assert 'id="sessionState"' not in html
+    assert "API base" in html
+    assert 'id="panel-api"' in html
 
 
 def test_left_rail_hosts_console_and_session_controls():
