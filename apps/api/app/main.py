@@ -3429,6 +3429,10 @@ def _category_apply_error(exc: Exception) -> str:
     return str(exc)
 
 
+def _outlook_category_labels_enabled() -> bool:
+    return _bool_env("OUTLOOK_CATEGORY_LABELS_ENABLED")
+
+
 @app.post("/mail/inbox/automove")
 async def automove_inbox_messages(
     account: str = Query(..., description="Connected account email."),
@@ -3631,20 +3635,21 @@ async def _automove_for_account(
 
         applied_categories = []
         label_error = None
-        desired_categories = _desired_attention_categories(
-            decision,
-            message,
-            moved=True,
-        )
-        try:
-            applied_categories = await _apply_message_categories(
-                access_token,
-                provider_message_id,
-                _message_categories(message),
-                desired_categories,
+        if _outlook_category_labels_enabled():
+            desired_categories = _desired_attention_categories(
+                decision,
+                message,
+                moved=True,
             )
-        except Exception as exc:
-            label_error = _category_apply_error(exc)
+            try:
+                applied_categories = await _apply_message_categories(
+                    access_token,
+                    provider_message_id,
+                    _message_categories(message),
+                    desired_categories,
+                )
+            except Exception as exc:
+                label_error = _category_apply_error(exc)
 
         try:
             await _graph_move_message(access_token, provider_message_id, destination_folder_id)

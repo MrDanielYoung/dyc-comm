@@ -23,9 +23,14 @@ Recommended category set:
 
 ## Current Automation Behavior
 
-The automation applies these category names to messages using Microsoft
-Graph's message `categories` property. This uses the existing
-`Mail.ReadWrite` delegated permission.
+The automation has a guarded code path that can apply these category names
+to moved messages using Microsoft Graph's message `categories` property.
+This uses the existing `Mail.ReadWrite` delegated permission.
+
+This path is disabled in production unless
+`OUTLOOK_CATEGORY_LABELS_ENABLED=true` is set. The first production attempt
+showed that category writes need their own verified rollout rather than
+being folded into the active backlog cleanup.
 
 Color setup lives in Outlook's master category list. Creating or editing
 category colors through Graph requires `MailboxSettings.ReadWrite`, so the
