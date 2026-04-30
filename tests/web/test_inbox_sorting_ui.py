@@ -1,4 +1,4 @@
-"""Static checks that the web UI exposes the inbox dry-run controls.
+"""Static checks that the web UI exposes inbox sorting controls.
 
 These don't run JS — they parse `apps/web/index.html` and assert the
 elements / wiring needed for the Inbox Sorting tab are present. Pure
@@ -25,14 +25,15 @@ def test_sorting_tab_button_exists():
     assert 'aria-controls="panel-sorting"' in html
 
 
-def test_sorting_panel_and_run_controls_exist():
+def test_sorting_panel_exists_without_diagnostic_run_controls():
     html = _read_html()
     assert 'id="panel-sorting"' in html
     assert 'data-testid="sorting-panel"' in html
-    assert 'data-testid="sorting-run-button"' in html
     assert 'data-testid="sorting-refresh-button"' in html
     assert 'data-testid="sorting-table-body"' in html
     assert 'data-testid="sorting-status"' in html
+    assert 'data-testid="sorting-run-button"' not in html
+    assert 'data-testid="sorting-automation-button"' not in html
 
 
 def test_sorting_panel_has_nondestructive_banner():
@@ -43,7 +44,7 @@ def test_sorting_panel_has_nondestructive_banner():
     assert "10 - Review" in html
 
 
-def test_sorting_run_button_calls_classify_dryrun_endpoint():
+def test_diagnostic_controls_call_sorting_endpoints():
     html = _read_html()
     # The JS uses these exact paths to call the persisted dry-run API.
     assert "/mail/inbox/classify-dryrun" in html
@@ -186,12 +187,10 @@ def test_inbox_sorting_string_present():
     assert "Inbox Sorting" in html
 
 
-def test_run_inbox_classification_dryrun_string_present():
-    """Required by the stabilization checklist: 'Run inbox classification
-    (dry-run)' must remain in the shipped web build.
-    """
+def test_dryrun_control_lives_under_diagnostics():
     html = _read_html()
-    assert "Run inbox classification (dry-run)" in html
+    assert "<strong>Dry-run classify</strong>" in html
+    assert "/mail/inbox/classify-dryrun" in html
 
 
 def test_sorting_panel_exposes_move_action_with_confirmation():
@@ -218,9 +217,16 @@ def test_sorting_panel_exposes_move_action_with_confirmation():
     assert "<th>Action</th>" in html
 
 
-def test_sorting_panel_exposes_safe_automation_action():
+def test_safe_automation_control_lives_under_diagnostics():
     html = _read_html()
-    assert 'data-testid="sorting-automation-button"' in html
-    assert "Run safe automation" in html
+    assert 'id="diagnosticAutomationButton"' in html
+    assert "<strong>Manual automation</strong>" in html
     assert "/mail/inbox/automove" in html
     assert "window.confirm" in html
+
+
+def test_sorting_panel_shows_automation_active_state():
+    html = _read_html()
+    assert 'data-testid="sorting-automation-state"' in html
+    assert "Automation active" in html
+    assert "about every\n                          six minutes" in html
