@@ -432,13 +432,40 @@
       }
 
       .endpoint-button {
+        position: relative;
         text-align: left;
         min-height: 62px;
-        padding: 12px 14px;
+        padding: 12px 72px 12px 14px;
         border-radius: 10px;
         border: 1px solid var(--line);
         background: rgba(255, 255, 255, 0.8);
         color: var(--text);
+      }
+
+      .endpoint-button:not(:disabled) {
+        border-color: rgba(74, 131, 197, 0.42);
+        box-shadow: inset 0 0 0 1px rgba(74, 131, 197, 0.08);
+      }
+
+      .endpoint-button:not(:disabled)::after {
+        content: "Run";
+        position: absolute;
+        top: 50%;
+        right: 14px;
+        transform: translateY(-50%);
+        color: #fff;
+        background: var(--accent-deep);
+        border-radius: 8px;
+        padding: 5px 9px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .endpoint-button.is-running::after {
+        content: "Running";
+        background: var(--warning);
       }
 
       .endpoint-button strong {
@@ -2256,16 +2283,16 @@
       }
 
       function applyEndpointReadinessUI() {
-        const ready = selectedAccountIsMailboxReady();
-        foldersButton.disabled = !ready;
-        inventorySyncButton.disabled = !ready;
-        bootstrapButton.disabled = !ready;
-        categoryBootstrapButton.disabled = !ready;
+        const hasSelection = Boolean(accountState.selectedEmail);
+        foldersButton.disabled = !hasSelection;
+        inventorySyncButton.disabled = !hasSelection;
+        bootstrapButton.disabled = !hasSelection;
+        categoryBootstrapButton.disabled = !hasSelection;
         if (diagnosticDryRunButton) {
-          diagnosticDryRunButton.disabled = !ready;
+          diagnosticDryRunButton.disabled = !hasSelection;
         }
         if (diagnosticAutomationButton) {
-          diagnosticAutomationButton.disabled = !ready;
+          diagnosticAutomationButton.disabled = !hasSelection;
         }
       }
 
@@ -2390,6 +2417,12 @@
           ? payload
           : JSON.stringify(payload, null, 2);
         rawOutput.textContent = `${label}\n\n${text}`;
+      }
+
+      function setEndpointRunning(button, isRunning) {
+        if (!button) return;
+        button.classList.toggle("is-running", isRunning);
+        button.disabled = isRunning;
       }
 
       function renderMissingConfig(payload) {
@@ -3600,6 +3633,21 @@
         }
       }
 
+      async function runEndpointAction(button, label, path, options, onSuccess) {
+        setEndpointRunning(button, true);
+        setRawOutput(label, `Running for ${accountState.selectedEmail || "selected account"}...`);
+        try {
+          const payload = await safeCallApi(label, path, options);
+          if (payload && onSuccess) {
+            await onSuccess(payload);
+          }
+          return payload;
+        } finally {
+          setEndpointRunning(button, false);
+          applyEndpointReadinessUI();
+        }
+      }
+
       const url = new URL(window.location.href);
       if (url.searchParams.get("auth") === "success") {
         url.search = "";
@@ -3654,31 +3702,51 @@
       if (dashboardSortingOpen) {
         dashboardSortingOpen.addEventListener("click", () => activateTab("sorting"));
       }
-      sessionButton.addEventListener("click", () => safeCallApi("Session", "/auth/session"));
+      sessionButton.addEventListener("click", () => {
+        runEndpointAction(sessionButton, "Session", "/auth/session");
+      });
       foldersButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Folders", accountScopedPath("/mail/folders"));
-        if (payload) renderFolders(payload.folders || []);
+        await runEndpointAction(
+          foldersButton,
+          "Folders",
+          accountScopedPath("/mail/folders"),
+          undefined,
+          (payload) => renderFolders(payload.folders || [])
+        );
       });
       inventorySyncButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Inventory sync", accountScopedPath("/mail/folders/inventory/sync"), {
-          method: "POST"
-        });
-        if (payload) renderFolders(payload.folders || []);
-        await loadAccounts();
-        await loadAlerts();
+        await runEndpointAction(
+          inventorySyncButton,
+          "Inventory sync",
+          accountScopedPath("/mail/folders/inventory/sync"),
+          { method: "POST" },
+          async (payload) => {
+            renderFolders(payload.folders || []);
+            await loadAccounts();
+            await loadAlerts();
+          }
+        );
       });
       bootstrapButton.addEventListener("click", async () => {
-        const payload = await safeCallApi("Bootstrap folders", accountScopedPath("/mail/folders/bootstrap"), {
-          method: "POST"
-        });
-        if (payload) renderFolders(payload.ensured_folders || []);
-        await loadAccounts();
-        await loadAlerts();
+        await runEndpointAction(
+          bootstrapButton,
+          "Bootstrap folders",
+          accountScopedPath("/mail/folders/bootstrap"),
+          { method: "POST" },
+          async (payload) => {
+            renderFolders(payload.ensured_folders || []);
+            await loadAccounts();
+            await loadAlerts();
+          }
+        );
       });
       categoryBootstrapButton.addEventListener("click", () => {
-        safeCallApi("Bootstrap labels", accountScopedPath("/mail/categories/bootstrap"), {
-          method: "POST"
-        });
+        runEndpointAction(
+          categoryBootstrapButton,
+          "Bootstrap labels",
+          accountScopedPath("/mail/categories/bootstrap"),
+          { method: "POST" }
+        );
       });
       if (diagnosticDryRunButton) {
         diagnosticDryRunButton.addEventListener("click", () => runSortingDryRun());
