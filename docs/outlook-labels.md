@@ -8,18 +8,18 @@ Recommended category set:
 
 | Category | Outlook color preset | Outlook color | Purpose |
 | --- | --- | --- | --- |
-| `DYC - P0 Today` | `preset0` | Red | Same-day or urgent attention. |
-| `DYC - P1 This Week` | `preset1` | Orange | Important, but not same-day. |
-| `DYC - Reply Needed` | `preset7` | Blue | Daniel owes a response. |
-| `DYC - Waiting` | `preset3` | Yellow | Daniel is waiting on someone else. |
-| `DYC - Read Later` | `preset10` | Steel | Useful reading, not operationally urgent. |
-| `DYC - FYI` | `preset12` | Gray | Informational; no action expected. |
-| `DYC - Money` | `preset4` | Green | Payments, invoices, banking, reimbursement, procurement. |
-| `DYC - Legal Contract` | `preset9` | Cranberry | Legal, contract, signature, terms, or agreement context. |
-| `DYC - Customer Patient` | `preset8` | Purple | Sensitive customer, clinical, patient-adjacent, or privacy context. |
-| `DYC - Travel Logistics` | `preset5` | Teal | Flights, hotels, rides, reservations, itineraries, logistics. |
-| `DYC - Needs Review` | `preset15` | Dark red | Review/ambiguous/safety-held message. |
-| `DYC - Automation Moved` | `preset6` | Olive | Message was moved by DYC automation. |
+| `# Today` | `preset0` | Red | Same-day or urgent attention. |
+| `# This Week` | `preset1` | Orange | Important, but not same-day. |
+| `# Reply` | `preset7` | Blue | Daniel owes a response. |
+| `# Waiting` | `preset3` | Yellow | Daniel is waiting on someone else. |
+| `# Read Later` | `preset10` | Steel | Useful reading, not operationally urgent. |
+| `# FYI` | `preset12` | Gray | Informational; no action expected. |
+| `# Money` | `preset4` | Green | Payments, invoices, banking, reimbursement, procurement. |
+| `# Legal` | `preset9` | Cranberry | Legal, contract, signature, terms, or agreement context. |
+| `# Customer` | `preset8` | Purple | Sensitive customer, clinical, patient-adjacent, or privacy context. |
+| `# Travel` | `preset5` | Teal | Flights, hotels, rides, reservations, itineraries, logistics. |
+| `# Review` | `preset15` | Dark red | Review/ambiguous/safety-held message. |
+| `# Moved` | `preset6` | Olive | Message was moved by DYC automation. |
 
 ## Current Automation Behavior
 
@@ -32,16 +32,26 @@ This path is disabled in production unless
 showed that category writes need their own verified rollout rather than
 being folded into the active backlog cleanup.
 
-Color setup lives in Outlook's master category list. Creating or editing
-category colors through Graph requires `MailboxSettings.ReadWrite`, so the
-current implementation does not add that permission automatically during
-the active production rollout. Until that scope is added and Daniel
-re-consents, colors can be configured manually in Outlook:
+Color setup lives in Outlook's master category list. Creating categories
+with colors through Graph requires `MailboxSettings.ReadWrite`. The app
+requests that scope and exposes a guarded diagnostic endpoint:
+
+```text
+POST /mail/categories/bootstrap
+```
+
+The endpoint creates missing `# ...` categories for every visible connected
+mailbox that has a usable refresh token. It skips mailboxes that still need
+reconnection or tenant repair.
+
+If the endpoint is unavailable or a mailbox has not re-consented to the
+new scope, colors can still be configured manually in Outlook:
 
 1. Open Outlook.
 2. Go to Categories / Manage categories.
-3. Create the `DYC - ...` categories above.
+3. Create the `# ...` categories above.
 4. Assign the suggested colors.
 
-Once the extra permission is intentionally added, DYC can bootstrap this
-master category list automatically for every connected mailbox.
+BoldWorks currently fails Microsoft sign-in with AADSTS50020, so category
+bootstrap cannot touch that mailbox until its tenant/guest access issue is
+fixed.

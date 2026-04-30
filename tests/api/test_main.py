@@ -256,6 +256,7 @@ def test_microsoft_start_sets_state_and_pkce(monkeypatch):
     assert parsed.netloc == "login.microsoftonline.com"
     assert query["client_id"] == ["client-id"]
     assert query["response_type"] == ["code"]
+    assert "MailboxSettings.ReadWrite" in query["scope"][0]
     assert query["code_challenge_method"] == ["S256"]
     assert main.AUTH_COOKIE in response.cookies
     assert main.PKCE_COOKIE in response.cookies
@@ -912,6 +913,96 @@ def test_bootstrap_mail_folders_requires_session(monkeypatch):
     response = test_client.post("/mail/folders/bootstrap")
     assert response.status_code == 401
     assert response.json()["detail"] == "No linked account session found."
+
+
+def test_bootstrap_categories_requires_session(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+    response = test_client.post("/mail/categories/bootstrap")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "No linked account session found."
+
+
+def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda email: [
+            {
+                "account_id": "dyc-account",
+                "email": "daniel@danielyoung.io",
+                "display_name": "Daniel Young",
+                "has_refresh_token": True,
+            },
+            {
+                "account_id": "dhw-account",
+                "email": "daniel.young@digitalhealthworks.com",
+                "display_name": "Daniel Young",
+                "has_refresh_token": True,
+            },
+            {
+                "account_id": "bw-account",
+                "email": "daniel.young@boldworks.de",
+                "display_name": "Daniel Young",
+                "has_refresh_token": False,
+            },
+        ],
+    )
+
+    async def fake_graph_access_token_for_email(email: str):
+        return f"token:{email}", {
+            "account_id": f"{email}:id",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_graph_get(access_token, path, params=None):
+        assert path == "/me/outlook/masterCategories"
+        return {"value": [{"displayName": "# Today", "color": "preset0"}]}
+
+    created: list[tuple[str, str, dict]] = []
+
+    async def fake_graph_post(access_token, path, payload):
+        assert path == "/me/outlook/masterCategories"
+        created.append((access_token, path, payload))
+        return payload
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_graph_access_token_for_email)
+    monkeypatch.setattr(main, "_graph_get", fake_graph_get)
+    monkeypatch.setattr(main, "_graph_post", fake_graph_post)
+    test_client = TestClient(main.app)
+
+    response = test_client.post(
+        "/mail/categories/bootstrap",
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["categories"][0] == {"displayName": "# Today", "color": "preset0"}
+    assert [account["email"] for account in body["accounts"]] == [
+        "daniel@danielyoung.io",
+        "daniel.young@digitalhealthworks.com",
+        "daniel.young@boldworks.de",
+    ]
+    assert body["accounts"][0]["status"] == "succeeded"
+    assert body["accounts"][0]["existing_count"] == 1
+    assert body["accounts"][0]["created_count"] == 11
+    assert body["accounts"][1]["status"] == "succeeded"
+    assert body["accounts"][2]["status"] == "skipped"
+    assert body["accounts"][2]["reason"] == "mailbox_access_not_ready"
+    assert len(created) == 22
+    assert (
+        "token:daniel@danielyoung.io",
+        "/me/outlook/masterCategories",
+        {"displayName": "# Reply", "color": "preset7"},
+    ) in created
+    assert (
+        "token:daniel.young@digitalhealthworks.com",
+        "/me/outlook/masterCategories",
+        {"displayName": "# Moved", "color": "preset6"},
+    ) in created
 
 
 def test_ensure_default_mail_folders_creates_missing_only(monkeypatch):
