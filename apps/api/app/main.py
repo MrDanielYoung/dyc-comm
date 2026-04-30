@@ -322,6 +322,8 @@ def _authorize_url(
     code_challenge: str,
     login_hint: str | None = None,
     tenant_hint: str | None = None,
+    prompt: str = "select_account",
+    domain_hint: str | None = None,
 ) -> str:
     tenant_segment = _authorize_tenant_segment(login_hint=login_hint, tenant_hint=tenant_hint)
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
@@ -335,10 +337,12 @@ def _authorize_url(
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "prompt": "select_account",
+        "prompt": prompt,
     }
     if login_hint:
         params["login_hint"] = login_hint
+    if domain_hint:
+        params["domain_hint"] = domain_hint
     return (
         f"https://login.microsoftonline.com/{tenant_segment}/oauth2/v2.0/authorize?"
         f"{urlencode(params)}"
@@ -1479,17 +1483,25 @@ def auth_session(
 def microsoft_start(
     login_hint: str | None = Query(default=None),
     tenant_hint: str | None = Query(default=None),
+    prompt: str | None = Query(default=None),
+    domain_hint: str | None = Query(default=None),
 ) -> Response:
     state = secrets.token_urlsafe(24)
     verifier = _code_verifier()
     hint = login_hint.strip() if login_hint else None
     tenant = tenant_hint.strip() if tenant_hint else None
+    requested_prompt = prompt.strip() if prompt else "select_account"
+    if requested_prompt not in {"select_account", "login"}:
+        raise HTTPException(status_code=400, detail="prompt must be select_account or login.")
+    domain = domain_hint.strip() if domain_hint else None
     tenant_segment = _authorize_tenant_segment(login_hint=hint or None, tenant_hint=tenant or None)
     authorize_url = _authorize_url(
         state,
         _code_challenge(verifier),
         login_hint=hint or None,
         tenant_hint=tenant or None,
+        prompt=requested_prompt,
+        domain_hint=domain or None,
     )
     response = RedirectResponse(authorize_url, status_code=302)
     response.set_cookie(
