@@ -1038,6 +1038,61 @@ def test_bootstrap_mail_folders_ensures_defaults(monkeypatch):
     assert persisted_inventory[0][0] == "account-123"
 
 
+def test_bootstrap_mail_folders_can_target_selected_visible_account(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    persisted_inventory: list[tuple[str, list[dict[str, object]]]] = []
+
+    monkeypatch.setattr(
+        main,
+        "_list_user_accounts",
+        lambda user_email: [
+            {
+                "account_id": "dyc-account",
+                "email": "daniel@danielyoung.io",
+                "display_name": "Daniel Young",
+                "has_refresh_token": True,
+            },
+            {
+                "account_id": "dhw-account",
+                "email": "daniel.young@digitalhealthworks.com",
+                "display_name": "Daniel Young",
+                "has_refresh_token": True,
+            },
+        ],
+    )
+
+    async def fake_graph_access_token_for_email(email: str):
+        assert email == "daniel@danielyoung.io"
+        return "graph-token", {
+            "account_id": "dyc-account",
+            "email": email,
+            "display_name": "Daniel Young",
+        }
+
+    async def fake_ensure_default_mail_folders(access_token: str):
+        assert access_token == "graph-token"
+        return [{"id": "review-id", "displayName": "10 - Review"}]
+
+    monkeypatch.setattr(main, "_graph_access_token_for_email", fake_graph_access_token_for_email)
+    monkeypatch.setattr(main, "_ensure_default_mail_folders", fake_ensure_default_mail_folders)
+    monkeypatch.setattr(
+        main,
+        "_persist_folder_inventory",
+        lambda account_id, folders: persisted_inventory.append((account_id, folders)),
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.post(
+        "/mail/folders/bootstrap?account=daniel%40danielyoung.io",
+        cookies={main.EMAIL_COOKIE: "daniel.young@digitalhealthworks.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["account"]["email"] == "daniel@danielyoung.io"
+    assert persisted_inventory
+    assert persisted_inventory[0][0] == "dyc-account"
+
+
 def test_bootstrap_mail_folders_requires_session(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     test_client = TestClient(main.app)
