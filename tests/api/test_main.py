@@ -658,7 +658,54 @@ def test_authorize_url_accepts_allow_listed_tenant_hint(monkeypatch):
     query = parse_qs(parsed.query)
     assert parsed.path.startswith(f"/{BOLDWORKS_TENANT}/")
     assert query["login_hint"] == ["daniel.young@boldworks.de"]
+    assert query["prompt"] == ["select_account"]
     assert response.cookies[main.AUTH_TENANT_COOKIE] == BOLDWORKS_TENANT
+
+
+def test_authorize_url_can_force_fresh_login_for_tenant_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS",
+        f"{DECODING_OPTIONS_TENANT},{DHW_TENANT},{BOLDWORKS_TENANT}",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start"
+        "?login_hint=daniel.young@boldworks.de"
+        f"&tenant_hint={BOLDWORKS_TENANT}"
+        "&prompt=login"
+        "&domain_hint=boldworks.de",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+    assert parsed.path.startswith(f"/{BOLDWORKS_TENANT}/")
+    assert query["login_hint"] == ["daniel.young@boldworks.de"]
+    assert query["prompt"] == ["login"]
+    assert query["domain_hint"] == ["boldworks.de"]
+    assert response.cookies[main.AUTH_TENANT_COOKIE] == BOLDWORKS_TENANT
+
+
+def test_authorize_url_rejects_unsupported_prompt(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start?prompt=none",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "prompt must be select_account or login."
 
 
 def test_authorize_url_rejects_unlisted_tenant_hint(monkeypatch):
