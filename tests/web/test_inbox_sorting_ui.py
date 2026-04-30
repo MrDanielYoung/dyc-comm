@@ -262,6 +262,21 @@ def test_folder_bootstrap_control_lives_under_diagnostics():
     assert 'accountScopedPath("/mail/folders/bootstrap")' in html
 
 
+def test_diagnostics_actions_are_visible_clickable_controls():
+    html = _read_html()
+    assert ".endpoint-button:not(:disabled)::after" in html
+    assert 'content: "Run"' in html
+    assert "runEndpointAction" in html
+    assert "Running for ${accountState.selectedEmail" in html
+
+
+def test_diagnostics_actions_enable_for_selected_account():
+    html = _read_html()
+    assert "const hasSelection = Boolean(accountState.selectedEmail);" in html
+    assert "foldersButton.disabled = !hasSelection;" in html
+    assert "bootstrapButton.disabled = !hasSelection;" in html
+
+
 def test_sorting_panel_shows_automation_active_state():
     html = _read_html()
     assert 'data-testid="sorting-automation-state"' in html
