@@ -2070,6 +2070,10 @@
                         <strong>Bootstrap</strong>
                         <span>POST `/mail/folders/bootstrap`</span>
                       </button>
+                      <button class="endpoint-button" id="categoryBootstrapButton" type="button" disabled>
+                        <strong>Category Bootstrap</strong>
+                        <span>POST `/mail/categories/bootstrap`</span>
+                      </button>
                       <button class="endpoint-button" id="diagnosticDryRunButton" type="button" disabled>
                         <strong>Dry-run classify</strong>
                         <span>POST `/mail/inbox/classify-dryrun`</span>
@@ -2156,6 +2160,7 @@
       const foldersButton = document.getElementById("foldersButton");
       const inventorySyncButton = document.getElementById("inventorySyncButton");
       const bootstrapButton = document.getElementById("bootstrapButton");
+      const categoryBootstrapButton = document.getElementById("categoryBootstrapButton");
       const diagnosticDryRunButton = document.getElementById("diagnosticDryRunButton");
       const diagnosticAutomationButton = document.getElementById("diagnosticAutomationButton");
       const dycFolderList = document.getElementById("dycFolderList");
@@ -2324,6 +2329,7 @@
         foldersButton.disabled = true;
         inventorySyncButton.disabled = true;
         bootstrapButton.disabled = true;
+        categoryBootstrapButton.disabled = true;
         if (diagnosticDryRunButton) diagnosticDryRunButton.disabled = true;
         if (diagnosticAutomationButton) diagnosticAutomationButton.disabled = true;
       }
@@ -2385,6 +2391,7 @@
         foldersButton.disabled = !mailboxReady;
         inventorySyncButton.disabled = !mailboxReady;
         bootstrapButton.disabled = !mailboxReady;
+        categoryBootstrapButton.disabled = !mailboxReady;
       }
 
       function renderFolderBucket(element, folders, emptyText) {
@@ -3632,6 +3639,11 @@
           method: "POST"
         });
         if (payload) renderFolders(payload.ensured_folders || []);
+      });
+      categoryBootstrapButton.addEventListener("click", () => {
+        safeCallApi("Category bootstrap", "/mail/categories/bootstrap", {
+          method: "POST"
+        });
       });
       if (diagnosticDryRunButton) {
         diagnosticDryRunButton.addEventListener("click", () => runSortingDryRun());

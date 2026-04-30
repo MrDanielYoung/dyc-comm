@@ -24,7 +24,10 @@ PKCE_COOKIE = "dyc_auth_pkce"
 AUTH_TENANT_COOKIE = "dyc_auth_tenant"
 EMAIL_COOKIE = "dyc_account_email"
 NAME_COOKIE = "dyc_account_name"
-MICROSOFT_SCOPE = "openid profile email offline_access User.Read Mail.Read Mail.ReadWrite"
+MICROSOFT_SCOPE = (
+    "openid profile email offline_access User.Read Mail.Read Mail.ReadWrite "
+    "MailboxSettings.ReadWrite"
+)
 MICROSOFT_PROVIDER = "microsoft_365"
 DEFAULT_LEGACY_RULE_FOLDER_NAMES = ("Wolt", "Amazon", "Komote", "Cycle Touring")
 SYSTEM_FOLDER_NAMES = (
@@ -48,18 +51,18 @@ DEFAULT_MVP_FOLDER_SPECS = (
     {"name": "90 - IT Reports", "aliases": ("IT Reports",)},
 )
 DEFAULT_OUTLOOK_CATEGORY_SPECS = (
-    {"displayName": "DYC - P0 Today", "color": "preset0"},
-    {"displayName": "DYC - P1 This Week", "color": "preset1"},
-    {"displayName": "DYC - Reply Needed", "color": "preset7"},
-    {"displayName": "DYC - Waiting", "color": "preset3"},
-    {"displayName": "DYC - Read Later", "color": "preset10"},
-    {"displayName": "DYC - FYI", "color": "preset12"},
-    {"displayName": "DYC - Money", "color": "preset4"},
-    {"displayName": "DYC - Legal Contract", "color": "preset9"},
-    {"displayName": "DYC - Customer Patient", "color": "preset8"},
-    {"displayName": "DYC - Travel Logistics", "color": "preset5"},
-    {"displayName": "DYC - Needs Review", "color": "preset15"},
-    {"displayName": "DYC - Automation Moved", "color": "preset6"},
+    {"displayName": "# Today", "color": "preset0"},
+    {"displayName": "# This Week", "color": "preset1"},
+    {"displayName": "# Reply", "color": "preset7"},
+    {"displayName": "# Waiting", "color": "preset3"},
+    {"displayName": "# Read Later", "color": "preset10"},
+    {"displayName": "# FYI", "color": "preset12"},
+    {"displayName": "# Money", "color": "preset4"},
+    {"displayName": "# Legal", "color": "preset9"},
+    {"displayName": "# Customer", "color": "preset8"},
+    {"displayName": "# Travel", "color": "preset5"},
+    {"displayName": "# Review", "color": "preset15"},
+    {"displayName": "# Moved", "color": "preset6"},
 )
 _DB_BOOTSTRAPPED = False
 
@@ -1325,6 +1328,55 @@ async def _ensure_default_mail_folders(access_token: str) -> list[dict[str, Any]
     return ensured
 
 
+async def _list_outlook_categories(access_token: str) -> list[dict[str, Any]]:
+    payload = await _graph_get(
+        access_token,
+        "/me/outlook/masterCategories",
+        params={"$select": "id,displayName,color"},
+    )
+    return payload.get("value", [])
+
+
+async def _ensure_default_outlook_categories(access_token: str) -> dict[str, Any]:
+    existing_categories = await _list_outlook_categories(access_token)
+    existing_by_name = {
+        (category.get("displayName") or "").strip().casefold(): category
+        for category in existing_categories
+    }
+
+    ensured: list[dict[str, Any]] = []
+    created: list[dict[str, Any]] = []
+    for spec in DEFAULT_OUTLOOK_CATEGORY_SPECS:
+        display_name = spec["displayName"]
+        existing = existing_by_name.get(display_name.casefold())
+        if existing:
+            ensured.append(
+                {
+                    "displayName": existing.get("displayName") or display_name,
+                    "color": existing.get("color"),
+                    "status": "existing",
+                }
+            )
+            continue
+
+        created_category = await _graph_post(access_token, "/me/outlook/masterCategories", spec)
+        created.append(created_category)
+        ensured.append(
+            {
+                "displayName": created_category.get("displayName") or display_name,
+                "color": created_category.get("color") or spec["color"],
+                "status": "created",
+            }
+        )
+
+    return {
+        "expected": list(DEFAULT_OUTLOOK_CATEGORY_SPECS),
+        "ensured": ensured,
+        "created_count": len(created),
+        "existing_count": len(ensured) - len(created),
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -1549,6 +1601,68 @@ async def bootstrap_mail_folders(
             "display_name": account["display_name"],
         },
         "ensured_folders": folders,
+    }
+
+
+@app.post("/mail/categories/bootstrap")
+async def bootstrap_outlook_categories(
+    account: str | None = Query(
+        default=None,
+        description="Optional connected account email. Omit to bootstrap every visible account.",
+    ),
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    if not linked_email:
+        raise HTTPException(status_code=401, detail="No linked account session found.")
+
+    rows = _list_user_accounts(linked_email)
+    if account:
+        targets = [_scope_account_to_session(rows, account)]
+    else:
+        targets = rows
+
+    results: list[dict[str, Any]] = []
+    for target in targets:
+        email = target.get("email")
+        result: dict[str, Any] = {
+            "email": email,
+            "display_name": target.get("display_name"),
+        }
+        if not target.get("has_refresh_token"):
+            result.update(
+                {
+                    "status": "skipped",
+                    "reason": "mailbox_access_not_ready",
+                    "message": "Reconnect this mailbox before creating categories.",
+                }
+            )
+            results.append(result)
+            continue
+
+        try:
+            access_token, account_record = await _graph_access_token_for_email(email)
+            ensured = await _ensure_default_outlook_categories(access_token)
+            result.update(
+                {
+                    "status": "succeeded",
+                    "display_name": (
+                        account_record.get("display_name") or target.get("display_name")
+                    ),
+                    **ensured,
+                }
+            )
+        except HTTPException as exc:
+            result.update(
+                {
+                    "status": "failed",
+                    "error": exc.detail,
+                }
+            )
+        results.append(result)
+
+    return {
+        "categories": list(DEFAULT_OUTLOOK_CATEGORY_SPECS),
+        "accounts": results,
     }
 
 
@@ -3373,32 +3487,32 @@ def _desired_attention_categories(
     combined = f"{subject}\n{body}"
 
     if moved:
-        labels.append("DYC - Automation Moved")
+        labels.append("# Moved")
 
     if decision.forced_review or decision.recommended_folder == classifier_module.REVIEW_FOLDER:
-        labels.append("DYC - Needs Review")
+        labels.append("# Review")
 
     if decision.category == "human_direct":
-        labels.append("DYC - Reply Needed")
+        labels.append("# Reply")
     if decision.category == "finance_money":
-        labels.append("DYC - Money")
+        labels.append("# Money")
     if decision.category == "legal_contracts" or "legal_or_contractual" in decision.safety_flags:
-        labels.append("DYC - Legal Contract")
+        labels.append("# Legal")
     if "sensitive_content" in decision.safety_flags:
-        labels.append("DYC - Customer Patient")
+        labels.append("# Customer")
     if decision.category in {"newsletters_news", "marketing_promotions"}:
-        labels.append("DYC - Read Later")
+        labels.append("# Read Later")
     if decision.category in {"it_reports", "notifications_system", "service_updates"}:
-        labels.append("DYC - FYI")
+        labels.append("# FYI")
     if decision.category == "meetings_scheduling" or any(
         word in combined
         for word in ("flight", "hotel", "boarding", "reservation", "travel", "itinerary")
     ):
-        labels.append("DYC - Travel Logistics")
+        labels.append("# Travel")
     if any(word in combined for word in ("urgent", "today", "due today", "asap")):
-        labels.append("DYC - P0 Today")
+        labels.append("# Today")
     elif any(word in combined for word in ("this week", "by friday", "deadline")):
-        labels.append("DYC - P1 This Week")
+        labels.append("# This Week")
 
     return list(dict.fromkeys(labels))
 

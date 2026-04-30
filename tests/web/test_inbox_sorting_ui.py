@@ -244,6 +244,13 @@ def test_safe_automation_control_lives_under_diagnostics():
     assert "window.confirm" in html
 
 
+def test_category_bootstrap_control_lives_under_diagnostics():
+    html = _read_html()
+    assert 'id="categoryBootstrapButton"' in html
+    assert "<strong>Category Bootstrap</strong>" in html
+    assert "/mail/categories/bootstrap" in html
+
+
 def test_sorting_panel_shows_automation_active_state():
     html = _read_html()
     assert 'data-testid="sorting-automation-state"' in html
