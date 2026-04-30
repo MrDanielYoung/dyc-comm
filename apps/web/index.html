@@ -2144,7 +2144,8 @@
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
       const BOLDWORKS_LOGIN_HINT = "daniel.young@boldworks.de";
-      const BOLDWORKS_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(BOLDWORKS_LOGIN_HINT)}`;
+      const BOLDWORKS_TENANT_HINT = "63b7a03e-9711-4069-a064-cf64b7c45488";
+      const BOLDWORKS_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(BOLDWORKS_LOGIN_HINT)}&tenant_hint=${encodeURIComponent(BOLDWORKS_TENANT_HINT)}`;
       const INITIAL_SESSION_TIMEOUT_MS = 1800;
 
       const appHeader = document.getElementById("appHeader");
