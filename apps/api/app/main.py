@@ -62,7 +62,6 @@ DEFAULT_OUTLOOK_CATEGORY_SPECS = (
     {"displayName": "< Customer >", "color": "preset8"},
     {"displayName": "< Travel >", "color": "preset5"},
     {"displayName": "< Review >", "color": "preset15"},
-    {"displayName": "< Moved >", "color": "preset6"},
 )
 _DB_BOOTSTRAPPED = False
 
@@ -3560,9 +3559,6 @@ def _desired_attention_categories(
     subject = str(message.get("subject") or "").lower()
     body = str(message.get("bodyPreview") or "").lower()
     combined = f"{subject}\n{body}"
-
-    if moved:
-        labels.append("< Moved >")
 
     if decision.forced_review or decision.recommended_folder == classifier_module.REVIEW_FOLDER:
         labels.append("< Review >")
