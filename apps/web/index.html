@@ -991,9 +991,46 @@
 
       .sorting-table {
         width: 100%;
+        min-width: 1180px;
         border-collapse: collapse;
         font-size: 0.82rem;
         background: rgba(255, 255, 255, 0.92);
+        table-layout: fixed;
+      }
+
+      .sorting-table th:nth-child(1),
+      .sorting-table td:nth-child(1) {
+        width: 118px;
+      }
+
+      .sorting-table th:nth-child(2),
+      .sorting-table td:nth-child(2) {
+        width: 270px;
+      }
+
+      .sorting-table th:nth-child(3),
+      .sorting-table td:nth-child(3) {
+        width: 170px;
+      }
+
+      .sorting-table th:nth-child(4),
+      .sorting-table td:nth-child(4) {
+        width: 110px;
+      }
+
+      .sorting-table th:nth-child(5),
+      .sorting-table td:nth-child(5) {
+        width: 300px;
+      }
+
+      .sorting-table th:nth-child(6),
+      .sorting-table td:nth-child(6) {
+        width: 105px;
+      }
+
+      .sorting-table th:nth-child(7),
+      .sorting-table td:nth-child(7) {
+        width: 150px;
       }
 
       .sorting-table th,
@@ -1020,9 +1057,9 @@
       .sorting-table .flags-list {
         margin: 4px 0 0;
         padding-left: 16px;
-        font-size: 0.74rem;
+        font-size: 0.78rem;
         color: var(--muted);
-        line-height: 1.35;
+        line-height: 1.45;
       }
 
       .sorting-table .reasons-list li,
@@ -2434,7 +2471,15 @@
         if (!value) return "—";
         const parsed = new Date(value);
         if (Number.isNaN(parsed.getTime())) return value;
-        return parsed.toLocaleString();
+        return parsed.toLocaleString(undefined, {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        });
       }
 
       function clearDashboard() {

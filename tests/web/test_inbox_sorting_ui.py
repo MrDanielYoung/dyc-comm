@@ -64,6 +64,13 @@ def test_sorting_table_columns_cover_all_classifier_signals():
         assert f"<th>{header}</th>" in html
 
 
+def test_sorting_table_uses_readable_layout_and_24_hour_time():
+    html = _read_html()
+    assert "min-width: 1180px" in html
+    assert "table-layout: fixed" in html
+    assert "hour12: false" in html
+
+
 def test_dashboard_has_sorting_summary_card():
     html = _read_html()
     # The dashboard tab must show the user that sorting is exposed.
