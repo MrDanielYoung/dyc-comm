@@ -1502,6 +1502,8 @@ async def microsoft_callback(
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
     error_description: str | None = Query(default=None),
+    admin_consent: str | None = Query(default=None),
+    tenant: str | None = Query(default=None),
     stored_state: str | None = Cookie(default=None, alias=AUTH_COOKIE),
     stored_verifier: str | None = Cookie(default=None, alias=PKCE_COOKIE),
     stored_tenant_segment: str | None = Cookie(default=None, alias=AUTH_TENANT_COOKIE),
@@ -1509,6 +1511,13 @@ async def microsoft_callback(
     if error:
         description = error_description or "Microsoft returned an authorization error."
         return RedirectResponse(_web_redirect("error", reason=description), status_code=302)
+
+    if admin_consent is not None and not code and not state:
+        status = "admin_consent_success" if admin_consent.lower() == "true" else "error"
+        params = {"tenant": tenant or ""}
+        if status == "error":
+            params["reason"] = "Microsoft admin consent was not granted."
+        return RedirectResponse(_web_redirect(status, **params), status_code=302)
 
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code or state.")
