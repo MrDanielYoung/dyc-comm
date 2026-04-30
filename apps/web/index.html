@@ -970,6 +970,32 @@
         align-items: center;
       }
 
+      .automation-state-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px;
+        border-radius: 10px;
+        border: 1px solid rgba(29, 127, 70, 0.22);
+        background: rgba(29, 127, 70, 0.07);
+      }
+
+      .automation-state-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 4px;
+        font-weight: 800;
+      }
+
+      .automation-state-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+
       .sorting-summary {
         display: flex;
         flex-wrap: wrap;
@@ -1855,37 +1881,30 @@
                         >Reconnect this account</a>
                       </span>
                     </div>
-                    <div class="sorting-actions">
-                      <button
-                        class="primary"
-                        type="button"
-                        id="sortingRunButton"
-                        data-testid="sorting-run-button"
-                      >Run inbox classification (dry-run)</button>
-                      <button
-                        class="secondary"
-                        type="button"
-                        id="sortingRefreshButton"
-                        data-testid="sorting-refresh-button"
-                      >Refresh log</button>
-                      <button
-                        class="secondary"
-                        type="button"
-                        id="sortingAutomationButton"
-                        data-testid="sorting-automation-button"
-                      >Run safe automation</button>
-                      <label class="metric-reason" for="sortingLimit">
-                        Scan
-                        <input
-                          id="sortingLimit"
-                          type="number"
-                          min="1"
-                          max="500"
-                          value="100"
-                          data-testid="sorting-limit"
-                          style="width: 64px; margin-left: 6px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;"
-                        />
-                      </label>
+                    <div
+                      class="automation-state-card"
+                      data-testid="sorting-automation-state"
+                    >
+                      <div>
+                        <p class="automation-state-title">
+                          <span class="health-dot green" aria-hidden="true"></span>
+                          Automation active
+                        </p>
+                        <p class="metric-reason">
+                          The scheduled runner scans connected mailboxes about every
+                          six minutes and moves only high-confidence messages. Review,
+                          legal, sensitive, low-confidence, or unclear messages stay put
+                          and are audited.
+                        </p>
+                      </div>
+                      <div class="automation-state-actions">
+                        <button
+                          class="secondary"
+                          type="button"
+                          id="sortingRefreshButton"
+                          data-testid="sorting-refresh-button"
+                        >Refresh audit view</button>
+                      </div>
                     </div>
                     <div
                       class="nondestructive-banner"
@@ -1907,7 +1926,7 @@
                       class="metric-reason"
                       id="sortingStatus"
                       data-testid="sorting-status"
-                    >Sign in to run a classification dry-run for the selected account.</p>
+                    >Sign in to view sorting automation for the selected account.</p>
                     <div
                       class="sorting-summary"
                       id="sortingSummary"
@@ -1930,10 +1949,8 @@
                         <tbody id="sortingTableBody" data-testid="sorting-table-body">
                           <tr>
                             <td colspan="7" class="empty-state">
-                              No dry-run results loaded yet. Click
-                              <strong>Run inbox classification (dry-run)</strong>
-                              above to fetch the most recent inbox messages and
-                              record what would happen.
+                              No sorting audit rows loaded yet. Automation runs on
+                              a schedule; diagnostic scans live under API / Diagnostics.
                             </td>
                           </tr>
                         </tbody>
@@ -2074,7 +2091,27 @@
                         <strong>Bootstrap</strong>
                         <span>POST `/mail/folders/bootstrap`</span>
                       </button>
+                      <button class="endpoint-button" id="diagnosticDryRunButton" type="button" disabled>
+                        <strong>Dry-run classify</strong>
+                        <span>POST `/mail/inbox/classify-dryrun`</span>
+                      </button>
+                      <button class="endpoint-button" id="diagnosticAutomationButton" type="button" disabled>
+                        <strong>Manual automation</strong>
+                        <span>POST `/mail/inbox/automove`</span>
+                      </button>
                     </div>
+                    <label class="metric-reason" for="sortingLimit" style="display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;">
+                      Diagnostic scan limit
+                      <input
+                        id="sortingLimit"
+                        type="number"
+                        min="1"
+                        max="500"
+                        value="100"
+                        data-testid="sorting-limit"
+                        style="width: 72px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;"
+                      />
+                    </label>
                     <h2 class="section-title">Last response</h2>
                     <pre class="raw-output" id="rawOutput">No requests run yet.</pre>
                   </section>
@@ -2144,6 +2181,8 @@
       const foldersButton = document.getElementById("foldersButton");
       const inventorySyncButton = document.getElementById("inventorySyncButton");
       const bootstrapButton = document.getElementById("bootstrapButton");
+      const diagnosticDryRunButton = document.getElementById("diagnosticDryRunButton");
+      const diagnosticAutomationButton = document.getElementById("diagnosticAutomationButton");
       const dycFolderList = document.getElementById("dycFolderList");
       const otherFolderList = document.getElementById("otherFolderList");
       const totalAccounts = document.getElementById("totalAccounts");
@@ -2177,9 +2216,7 @@
       const activitySelectedAccount = document.getElementById("activitySelectedAccount");
       const alertsSelectedAccount = document.getElementById("alertsSelectedAccount");
       const sortingSelectedAccount = document.getElementById("sortingSelectedAccount");
-      const sortingRunButton = document.getElementById("sortingRunButton");
       const sortingRefreshButton = document.getElementById("sortingRefreshButton");
-      const sortingAutomationButton = document.getElementById("sortingAutomationButton");
       const sortingLimitInput = document.getElementById("sortingLimit");
       const sortingStatus = document.getElementById("sortingStatus");
       const sortingSummary = document.getElementById("sortingSummary");
@@ -2226,14 +2263,14 @@
         if (sortingReconnectLink) {
           sortingReconnectLink.href = signInUrlForEmail(email);
         }
-        if (sortingRunButton) {
-          sortingRunButton.disabled = !ready;
-        }
         if (sortingRefreshButton) {
           sortingRefreshButton.disabled = !hasSelection;
         }
-        if (sortingAutomationButton) {
-          sortingAutomationButton.disabled = !ready;
+        if (diagnosticDryRunButton) {
+          diagnosticDryRunButton.disabled = !ready;
+        }
+        if (diagnosticAutomationButton) {
+          diagnosticAutomationButton.disabled = !ready;
         }
 
         if (dashboardSortingSetupNotice) {
@@ -2312,6 +2349,8 @@
         foldersButton.disabled = true;
         inventorySyncButton.disabled = true;
         bootstrapButton.disabled = true;
+        if (diagnosticDryRunButton) diagnosticDryRunButton.disabled = true;
+        if (diagnosticAutomationButton) diagnosticAutomationButton.disabled = true;
       }
 
       function clearMailboxView() {
@@ -2498,7 +2537,7 @@
         renderSortingTable([]);
         renderSortingSummary(null);
         updateDashboardSortingSummary(null);
-        setSortingStatus("Sign in to run a classification dry-run for the selected account.");
+        setSortingStatus("Sign in to view sorting automation for the selected account.");
         clearAccountNav();
       }
 
@@ -2940,8 +2979,8 @@
           sortingTableBody.innerHTML = `
             <tr>
               <td colspan="7" class="empty-state">
-                No dry-run results for this account yet. Click
-                <strong>Run inbox classification (dry-run)</strong> above.
+                No sorting audit rows for this account yet. Automation runs on
+                a schedule; diagnostic scans live under API / Diagnostics.
               </td>
             </tr>
           `;
@@ -3017,8 +3056,7 @@
           updateDashboardSortingSummary(summary);
           if (!entries.length) {
             setSortingStatus(
-              `No dry-run rows yet for ${account}. Click ` +
-              `“Run inbox classification (dry-run)” to record what would happen — nothing will be moved.`
+              `No sorting audit rows yet for ${account}. Automation runs on a schedule; diagnostic scans live under API / Diagnostics.`
             );
           } else {
             setSortingStatus(
@@ -3104,7 +3142,7 @@
       }
 
       async function runSortingDryRun() {
-        if (!sortingRunButton) return;
+        if (!diagnosticDryRunButton) return;
         const account = accountState.selectedEmail;
         if (!account) {
           setSortingStatus(
@@ -3123,7 +3161,7 @@
         }
         const limitRaw = Number(sortingLimitInput && sortingLimitInput.value) || 25;
         const limit = Math.min(Math.max(limitRaw, 1), 100);
-        sortingRunButton.disabled = true;
+        diagnosticDryRunButton.disabled = true;
         if (sortingRefreshButton) sortingRefreshButton.disabled = true;
         setSortingStatus(
           `Running read-only dry-run scan for ${account} (limit ${limit})…`
@@ -3167,13 +3205,13 @@
         } catch (error) {
           setSortingStatus(`Dry-run request failed: ${error.message}`, "error");
         } finally {
-          sortingRunButton.disabled = false;
+          diagnosticDryRunButton.disabled = false;
           if (sortingRefreshButton) sortingRefreshButton.disabled = false;
         }
       }
 
       async function runSafeAutomation() {
-        if (!sortingAutomationButton) return;
+        if (!diagnosticAutomationButton) return;
         const account = accountState.selectedEmail;
         if (!account) {
           setSortingStatus("Select a connected account before running automation.", "error");
@@ -3195,8 +3233,8 @@
         );
         if (!confirmed) return;
 
-        sortingAutomationButton.disabled = true;
-        if (sortingRunButton) sortingRunButton.disabled = true;
+        diagnosticAutomationButton.disabled = true;
+        if (diagnosticDryRunButton) diagnosticDryRunButton.disabled = true;
         if (sortingRefreshButton) sortingRefreshButton.disabled = true;
         setSortingStatus(
           `Running safe automation for ${account} (scan ${limit}, move cap ${moveLimit})…`
@@ -3230,7 +3268,7 @@
         } catch (error) {
           setSortingStatus(`Automation request failed: ${error.message}`, "error");
         } finally {
-          sortingAutomationButton.disabled = false;
+          diagnosticAutomationButton.disabled = false;
           applySortingReadinessUI();
         }
       }
@@ -3589,12 +3627,6 @@
       if (alertsRefresh) {
         alertsRefresh.addEventListener("click", () => loadAlerts());
       }
-      if (sortingRunButton) {
-        sortingRunButton.addEventListener("click", () => runSortingDryRun());
-      }
-      if (sortingAutomationButton) {
-        sortingAutomationButton.addEventListener("click", () => runSafeAutomation());
-      }
       if (sortingRefreshButton) {
         sortingRefreshButton.addEventListener("click", () => loadSortingLog());
       }
@@ -3630,6 +3662,12 @@
         });
         if (payload) renderFolders(payload.ensured_folders || []);
       });
+      if (diagnosticDryRunButton) {
+        diagnosticDryRunButton.addEventListener("click", () => runSortingDryRun());
+      }
+      if (diagnosticAutomationButton) {
+        diagnosticAutomationButton.addEventListener("click", () => runSafeAutomation());
+      }
 
       evaluateSession({ initial: true });
     </script>
