@@ -1605,8 +1605,7 @@
               >
                 <h3>Add another mailbox</h3>
                 <p>
-                  Link <code>daniel.young@digitalhealthworks.com</code> as a
-                  second Microsoft 365 mailbox in this session.
+                  Link another Microsoft 365 mailbox in this session.
                 </p>
                 <a
                   class="button-link primary"
@@ -1614,6 +1613,12 @@
                   data-testid="account-nav-connect-dhw"
                   href="#"
                 >Connect DHW mailbox</a>
+                <a
+                  class="button-link secondary"
+                  id="accountNavConnectBoldworksLink"
+                  data-testid="account-nav-connect-boldworks"
+                  href="#"
+                >Connect BoldWorks mailbox</a>
                 <p
                   class="tenant-warning"
                   data-testid="account-nav-tenant-warning"
@@ -1671,6 +1676,12 @@
                           data-testid="connect-dhw"
                           href="#"
                         >Connect daniel.young@digitalhealthworks.com</a>
+                        <a
+                          class="button-link secondary"
+                          id="connectBoldworksLink"
+                          data-testid="connect-boldworks"
+                          href="#"
+                        >Connect daniel.young@boldworks.de</a>
                         <a
                           class="button-link secondary"
                           id="connectGenericLink"
@@ -2132,6 +2143,8 @@
       const PRIMARY_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(PRIMARY_LOGIN_HINT)}`;
       const DHW_LOGIN_HINT = "daniel.young@digitalhealthworks.com";
       const DHW_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(DHW_LOGIN_HINT)}`;
+      const BOLDWORKS_LOGIN_HINT = "daniel.young@boldworks.de";
+      const BOLDWORKS_SIGN_IN_URL = `${SIGN_IN_URL}?login_hint=${encodeURIComponent(BOLDWORKS_LOGIN_HINT)}`;
       const INITIAL_SESSION_TIMEOUT_MS = 1800;
 
       const appHeader = document.getElementById("appHeader");
@@ -2171,6 +2184,7 @@
       const totalDycTargets = document.getElementById("totalDycTargets");
       const dashboardAccountList = document.getElementById("dashboardAccountList");
       const connectDhwLink = document.getElementById("connectDhwLink");
+      const connectBoldworksLink = document.getElementById("connectBoldworksLink");
       const connectGenericLink = document.getElementById("connectGenericLink");
       const railConnectAccountLink = document.getElementById("railConnectAccountLink");
       const railSignOutButton = document.getElementById("railSignOutButton");
@@ -2192,6 +2206,7 @@
       const accountNavList = document.getElementById("accountNavList");
       const accountNavConnect = document.getElementById("accountNavConnect");
       const accountNavConnectLink = document.getElementById("accountNavConnectLink");
+      const accountNavConnectBoldworksLink = document.getElementById("accountNavConnectBoldworksLink");
       const dashboardSelectedAccount = document.getElementById("dashboardSelectedAccount");
       const activitySelectedAccount = document.getElementById("activitySelectedAccount");
       const alertsSelectedAccount = document.getElementById("alertsSelectedAccount");
@@ -2269,8 +2284,10 @@
       gateConnectLink.href = PRIMARY_SIGN_IN_URL;
       headerSignInLink.href = PRIMARY_SIGN_IN_URL;
       connectDhwLink.href = DHW_SIGN_IN_URL;
+      connectBoldworksLink.href = BOLDWORKS_SIGN_IN_URL;
       connectGenericLink.href = SIGN_IN_URL;
       accountNavConnectLink.href = DHW_SIGN_IN_URL;
+      accountNavConnectBoldworksLink.href = BOLDWORKS_SIGN_IN_URL;
       railConnectAccountLink.href = SIGN_IN_URL;
 
       function setHeaderUnauthenticated() {

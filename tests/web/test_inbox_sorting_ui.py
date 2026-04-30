@@ -196,6 +196,8 @@ def test_connect_copy_does_not_claim_single_tenant_dhw_blocker():
     assert "currently single-tenant" not in html
     assert "DHW tenant cannot sign in directly" not in html
     assert "Multi-account session" in html
+    assert 'data-testid="connect-boldworks"' in html
+    assert "daniel.young@boldworks.de" in html
 
 
 def test_inbox_sorting_string_present():
