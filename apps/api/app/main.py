@@ -51,18 +51,18 @@ DEFAULT_MVP_FOLDER_SPECS = (
     {"name": "90 - IT Reports", "aliases": ("IT Reports",)},
 )
 DEFAULT_OUTLOOK_CATEGORY_SPECS = (
-    {"displayName": "# Today", "color": "preset0"},
-    {"displayName": "# This Week", "color": "preset1"},
-    {"displayName": "# Reply", "color": "preset7"},
-    {"displayName": "# Waiting", "color": "preset3"},
-    {"displayName": "# Read Later", "color": "preset10"},
-    {"displayName": "# FYI", "color": "preset12"},
-    {"displayName": "# Money", "color": "preset4"},
-    {"displayName": "# Legal", "color": "preset9"},
-    {"displayName": "# Customer", "color": "preset8"},
-    {"displayName": "# Travel", "color": "preset5"},
-    {"displayName": "# Review", "color": "preset15"},
-    {"displayName": "# Moved", "color": "preset6"},
+    {"displayName": "< Today >", "color": "preset0"},
+    {"displayName": "< This Week >", "color": "preset1"},
+    {"displayName": "< Reply >", "color": "preset7"},
+    {"displayName": "< Waiting >", "color": "preset3"},
+    {"displayName": "< Read Later >", "color": "preset10"},
+    {"displayName": "< FYI >", "color": "preset12"},
+    {"displayName": "< Money >", "color": "preset4"},
+    {"displayName": "< Legal >", "color": "preset9"},
+    {"displayName": "< Customer >", "color": "preset8"},
+    {"displayName": "< Travel >", "color": "preset5"},
+    {"displayName": "< Review >", "color": "preset15"},
+    {"displayName": "< Moved >", "color": "preset6"},
 )
 _DB_BOOTSTRAPPED = False
 
@@ -3487,32 +3487,32 @@ def _desired_attention_categories(
     combined = f"{subject}\n{body}"
 
     if moved:
-        labels.append("# Moved")
+        labels.append("< Moved >")
 
     if decision.forced_review or decision.recommended_folder == classifier_module.REVIEW_FOLDER:
-        labels.append("# Review")
+        labels.append("< Review >")
 
     if decision.category == "human_direct":
-        labels.append("# Reply")
+        labels.append("< Reply >")
     if decision.category == "finance_money":
-        labels.append("# Money")
+        labels.append("< Money >")
     if decision.category == "legal_contracts" or "legal_or_contractual" in decision.safety_flags:
-        labels.append("# Legal")
+        labels.append("< Legal >")
     if "sensitive_content" in decision.safety_flags:
-        labels.append("# Customer")
+        labels.append("< Customer >")
     if decision.category in {"newsletters_news", "marketing_promotions"}:
-        labels.append("# Read Later")
+        labels.append("< Read Later >")
     if decision.category in {"it_reports", "notifications_system", "service_updates"}:
-        labels.append("# FYI")
+        labels.append("< FYI >")
     if decision.category == "meetings_scheduling" or any(
         word in combined
         for word in ("flight", "hotel", "boarding", "reservation", "travel", "itinerary")
     ):
-        labels.append("# Travel")
+        labels.append("< Travel >")
     if any(word in combined for word in ("urgent", "today", "due today", "asap")):
-        labels.append("# Today")
+        labels.append("< Today >")
     elif any(word in combined for word in ("this week", "by friday", "deadline")):
-        labels.append("# This Week")
+        labels.append("< This Week >")
 
     return list(dict.fromkeys(labels))
 

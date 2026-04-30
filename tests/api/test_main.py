@@ -959,7 +959,7 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
 
     async def fake_graph_get(access_token, path, params=None):
         assert path == "/me/outlook/masterCategories"
-        return {"value": [{"displayName": "# Today", "color": "preset0"}]}
+        return {"value": [{"displayName": "< Today >", "color": "preset0"}]}
 
     created: list[tuple[str, str, dict]] = []
 
@@ -980,7 +980,7 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["categories"][0] == {"displayName": "# Today", "color": "preset0"}
+    assert body["categories"][0] == {"displayName": "< Today >", "color": "preset0"}
     assert [account["email"] for account in body["accounts"]] == [
         "daniel@danielyoung.io",
         "daniel.young@digitalhealthworks.com",
@@ -996,12 +996,12 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
     assert (
         "token:daniel@danielyoung.io",
         "/me/outlook/masterCategories",
-        {"displayName": "# Reply", "color": "preset7"},
+        {"displayName": "< Reply >", "color": "preset7"},
     ) in created
     assert (
         "token:daniel.young@digitalhealthworks.com",
         "/me/outlook/masterCategories",
-        {"displayName": "# Moved", "color": "preset6"},
+        {"displayName": "< Moved >", "color": "preset6"},
     ) in created
 
 
