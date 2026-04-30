@@ -51,6 +51,22 @@ def test_primary_login_uses_home_account_login_hint():
     assert "connectGenericLink.href = SIGN_IN_URL" in html
 
 
+def test_boldworks_connect_uses_explicit_login_hint():
+    """BoldWorks must not depend on the unhinted DYC tenant picker.
+
+    Microsoft currently rejects the BoldWorks account when the flow starts
+    in the Decoding Options tenant. The dedicated link must carry a
+    BoldWorks login_hint so the API redirects through /organizations.
+    """
+    html = _read_html()
+    assert 'BOLDWORKS_LOGIN_HINT = "daniel.young@boldworks.de"' in html
+    assert "BOLDWORKS_SIGN_IN_URL" in html
+    assert 'data-testid="connect-boldworks"' in html
+    assert 'data-testid="account-nav-connect-boldworks"' in html
+    assert "connectBoldworksLink.href = BOLDWORKS_SIGN_IN_URL" in html
+    assert "accountNavConnectBoldworksLink.href = BOLDWORKS_SIGN_IN_URL" in html
+
+
 # ---------------------------------------------------------------------------
 # Behavior tests: extract ``decideSessionAction`` from index.html and run it
 # under Node so we test what the browser will actually do, not just whether a
