@@ -3531,22 +3531,6 @@ async def _automove_for_account(
         dry_run_row = _load_dry_run_row(account_id, provider_message_id)
         skip_reason = _automation_safety_skip_reason(decision, min_confidence)
         if skip_reason:
-            applied_categories: list[str] = []
-            label_error: str | None = None
-            desired_categories = _desired_attention_categories(
-                decision,
-                message,
-                moved=False,
-            )
-            try:
-                applied_categories = await _apply_message_categories(
-                    access_token,
-                    provider_message_id,
-                    _message_categories(message),
-                    desired_categories,
-                )
-            except Exception as exc:
-                label_error = _category_apply_error(exc)
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
@@ -3570,29 +3554,11 @@ async def _automove_for_account(
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
-                    "categories_applied": applied_categories,
-                    "category_error": label_error,
                 }
             )
             continue
 
         if moved_count >= move_limit:
-            applied_categories = []
-            label_error = None
-            desired_categories = _desired_attention_categories(
-                decision,
-                message,
-                moved=False,
-            )
-            try:
-                applied_categories = await _apply_message_categories(
-                    access_token,
-                    provider_message_id,
-                    _message_categories(message),
-                    desired_categories,
-                )
-            except Exception as exc:
-                label_error = _category_apply_error(exc)
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
@@ -3616,8 +3582,6 @@ async def _automove_for_account(
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
-                    "categories_applied": applied_categories,
-                    "category_error": label_error,
                 }
             )
             continue
