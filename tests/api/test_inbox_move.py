@@ -559,6 +559,7 @@ def test_activity_log_includes_move_events(monkeypatch):
 
 def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     _install_account_session(monkeypatch)
+    monkeypatch.setenv("OUTLOOK_CATEGORY_LABELS_ENABLED", "true")
     monkeypatch.setattr(
         main,
         "_automation_health_for_account",
@@ -658,6 +659,7 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
 
 def test_automove_scans_deeper_than_move_limit(monkeypatch):
     _install_account_session(monkeypatch)
+    monkeypatch.setenv("OUTLOOK_CATEGORY_LABELS_ENABLED", "true")
     monkeypatch.setattr(
         main,
         "_automation_health_for_account",
