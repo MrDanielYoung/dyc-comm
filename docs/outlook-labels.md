@@ -19,7 +19,6 @@ Recommended category set:
 | `< Customer >` | `preset8` | Purple | Sensitive customer, clinical, patient-adjacent, or privacy context. |
 | `< Travel >` | `preset5` | Teal | Flights, hotels, rides, reservations, itineraries, logistics. |
 | `< Review >` | `preset15` | Dark red | Review/ambiguous/safety-held message. |
-| `< Moved >` | `preset6` | Olive | Message was moved by DYC automation. |
 
 ## Current Automation Behavior
 

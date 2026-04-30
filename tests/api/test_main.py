@@ -1174,11 +1174,11 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
     ]
     assert body["accounts"][0]["status"] == "succeeded"
     assert body["accounts"][0]["existing_count"] == 1
-    assert body["accounts"][0]["created_count"] == 11
+    assert body["accounts"][0]["created_count"] == 10
     assert body["accounts"][1]["status"] == "succeeded"
     assert body["accounts"][2]["status"] == "skipped"
     assert body["accounts"][2]["reason"] == "mailbox_access_not_ready"
-    assert len(created) == 22
+    assert len(created) == 20
     assert (
         "token:daniel@danielyoung.io",
         "/me/outlook/masterCategories",
@@ -1187,7 +1187,7 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
     assert (
         "token:daniel.young@digitalhealthworks.com",
         "/me/outlook/masterCategories",
-        {"displayName": "< Moved >", "color": "preset6"},
+        {"displayName": "< Review >", "color": "preset15"},
     ) in created
 
 
