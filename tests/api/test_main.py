@@ -722,6 +722,38 @@ def test_microsoft_callback_redirects_with_error(monkeypatch):
     assert response.headers["location"] == ("http://localhost:3000/?auth=error&reason=No+consent")
 
 
+def test_microsoft_callback_redirects_admin_consent_success(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        f"/auth/microsoft/callback?admin_consent=True&tenant={DHW_TENANT}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == (
+        f"http://localhost:3000/?auth=admin_consent_success&tenant={DHW_TENANT}"
+    )
+
+
+def test_microsoft_callback_redirects_admin_consent_denial(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        f"/auth/microsoft/callback?admin_consent=False&tenant={DHW_TENANT}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == (
+        "http://localhost:3000/?auth=error"
+        f"&tenant={DHW_TENANT}"
+        "&reason=Microsoft+admin+consent+was+not+granted."
+    )
+
+
 def test_microsoft_callback_rejects_state_mismatch(monkeypatch):
     monkeypatch.setattr(main, "settings", _local_settings())
     test_client = TestClient(main.app)
