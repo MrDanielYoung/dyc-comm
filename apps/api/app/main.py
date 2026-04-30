@@ -290,7 +290,10 @@ def _login_hint_targets_home_tenant(login_hint: str | None) -> bool:
     return _normalize_id(login_hint).endswith("@danielyoung.io")
 
 
-def _authorize_tenant_segment(login_hint: str | None = None) -> str:
+def _authorize_tenant_segment(
+    login_hint: str | None = None,
+    tenant_hint: str | None = None,
+) -> str:
     """Pick the tenant segment for the /authorize URL.
 
     The primary DYC account uses the configured home tenant id so Microsoft
@@ -299,6 +302,12 @@ def _authorize_tenant_segment(login_hint: str | None = None) -> str:
     ``/organizations`` when external tenants are allow-listed, so those
     specific cross-tenant accounts can still complete sign-in.
     """
+    if tenant_hint:
+        normalized_hint = _normalize_id(tenant_hint)
+        if normalized_hint not in _allowed_tenant_ids():
+            raise HTTPException(status_code=400, detail="tenant_hint is not allow-listed.")
+        return normalized_hint
+
     if (
         login_hint
         and not _login_hint_targets_home_tenant(login_hint)
@@ -308,8 +317,13 @@ def _authorize_tenant_segment(login_hint: str | None = None) -> str:
     return _require_env("MICROSOFT_ENTRA_TENANT_ID")
 
 
-def _authorize_url(state: str, code_challenge: str, login_hint: str | None = None) -> str:
-    tenant_segment = _authorize_tenant_segment(login_hint=login_hint)
+def _authorize_url(
+    state: str,
+    code_challenge: str,
+    login_hint: str | None = None,
+    tenant_hint: str | None = None,
+) -> str:
+    tenant_segment = _authorize_tenant_segment(login_hint=login_hint, tenant_hint=tenant_hint)
     client_id = _require_env("MICROSOFT_ENTRA_CLIENT_ID")
     redirect_uri = _require_env("MICROSOFT_ENTRA_REDIRECT_URI")
     params: dict[str, str] = {
@@ -1462,12 +1476,21 @@ def auth_session(
 
 
 @app.get("/auth/microsoft/start")
-def microsoft_start(login_hint: str | None = Query(default=None)) -> Response:
+def microsoft_start(
+    login_hint: str | None = Query(default=None),
+    tenant_hint: str | None = Query(default=None),
+) -> Response:
     state = secrets.token_urlsafe(24)
     verifier = _code_verifier()
     hint = login_hint.strip() if login_hint else None
-    tenant_segment = _authorize_tenant_segment(login_hint=hint or None)
-    authorize_url = _authorize_url(state, _code_challenge(verifier), login_hint=hint or None)
+    tenant = tenant_hint.strip() if tenant_hint else None
+    tenant_segment = _authorize_tenant_segment(login_hint=hint or None, tenant_hint=tenant or None)
+    authorize_url = _authorize_url(
+        state,
+        _code_challenge(verifier),
+        login_hint=hint or None,
+        tenant_hint=tenant or None,
+    )
     response = RedirectResponse(authorize_url, status_code=302)
     response.set_cookie(
         key=AUTH_COOKIE,

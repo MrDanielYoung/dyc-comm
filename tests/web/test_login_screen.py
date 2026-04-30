@@ -60,7 +60,9 @@ def test_boldworks_connect_uses_explicit_login_hint():
     """
     html = _read_html()
     assert 'BOLDWORKS_LOGIN_HINT = "daniel.young@boldworks.de"' in html
+    assert 'BOLDWORKS_TENANT_HINT = "63b7a03e-9711-4069-a064-cf64b7c45488"' in html
     assert "BOLDWORKS_SIGN_IN_URL" in html
+    assert "tenant_hint=" in html
     assert 'data-testid="connect-boldworks"' in html
     assert 'data-testid="account-nav-connect-boldworks"' in html
     assert "connectBoldworksLink.href = BOLDWORKS_SIGN_IN_URL" in html

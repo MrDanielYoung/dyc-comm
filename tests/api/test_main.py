@@ -39,6 +39,7 @@ SECRET_VARIABLES = {
 
 DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
 DHW_TENANT = "3dd54b52-c31e-442e-8705-a56b839e59a7"
+BOLDWORKS_TENANT = "63b7a03e-9711-4069-a064-cf64b7c45488"
 UNKNOWN_TENANT = "deadbeef-dead-beef-dead-beefdeadbeef"
 
 
@@ -629,6 +630,57 @@ def test_authorize_url_uses_organizations_for_hinted_multi_tenant_flow(monkeypat
     assert parsed.path.startswith("/organizations/")
     assert query["login_hint"] == ["daniel.young@digitalhealthworks.com"]
     assert response.cookies[main.AUTH_TENANT_COOKIE] == "organizations"
+
+
+def test_authorize_url_accepts_allow_listed_tenant_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv(
+        "ALLOWED_MICROSOFT_TENANT_IDS",
+        f"{DECODING_OPTIONS_TENANT},{DHW_TENANT},{BOLDWORKS_TENANT}",
+    )
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start"
+        "?login_hint=daniel.young@boldworks.de"
+        f"&tenant_hint={BOLDWORKS_TENANT}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+    assert parsed.path.startswith(f"/{BOLDWORKS_TENANT}/")
+    assert query["login_hint"] == ["daniel.young@boldworks.de"]
+    assert response.cookies[main.AUTH_TENANT_COOKIE] == BOLDWORKS_TENANT
+
+
+def test_authorize_url_rejects_unlisted_tenant_hint(monkeypatch):
+    monkeypatch.setattr(main, "settings", _local_settings())
+    monkeypatch.setenv("MICROSOFT_ENTRA_TENANT_ID", DECODING_OPTIONS_TENANT)
+    monkeypatch.setenv("MICROSOFT_ENTRA_CLIENT_ID", "client-id")
+    monkeypatch.setenv(
+        "MICROSOFT_ENTRA_REDIRECT_URI",
+        "http://localhost:8000/auth/microsoft/callback",
+    )
+    monkeypatch.setenv("ALLOWED_MICROSOFT_TENANT_IDS", f"{DECODING_OPTIONS_TENANT},{DHW_TENANT}")
+    test_client = TestClient(main.app)
+
+    response = test_client.get(
+        "/auth/microsoft/start"
+        "?login_hint=daniel.young@boldworks.de"
+        f"&tenant_hint={BOLDWORKS_TENANT}",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tenant_hint is not allow-listed."
 
 
 def test_authorize_url_pins_home_tenant_when_only_home_allowed(monkeypatch):
