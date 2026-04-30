@@ -769,23 +769,8 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
     assert category_calls == [
         (
             "graph-token",
-            "/me/messages/msg-review",
-            {
-                "categories": [
-                    "DYC - Needs Review",
-                    "DYC - Legal Contract",
-                ]
-            },
-        ),
-        (
-            "graph-token",
             "/me/messages/msg-move-1",
             {"categories": ["DYC - Automation Moved", "DYC - FYI"]},
-        ),
-        (
-            "graph-token",
-            "/me/messages/msg-move-2",
-            {"categories": ["DYC - FYI"]},
         ),
     ]
     assert payload["results"][2]["error"] == "automation_move_limit_reached"
@@ -871,18 +856,7 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
     assert payload["moved"] == 0
     assert payload["skipped"] == 1
     assert payload["results"][0]["error"] == "automation_forced_review"
-    assert category_calls == [
-        (
-            "graph-token",
-            "/me/messages/msg-1",
-            {
-                "categories": [
-                    "DYC - Needs Review",
-                    "DYC - Legal Contract",
-                ]
-            },
-        )
-    ]
+    assert category_calls == []
     assert persisted[0]["status"] == "skipped"
     assert persisted[0]["error"] == "automation_forced_review"
 
