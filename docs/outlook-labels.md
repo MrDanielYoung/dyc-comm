@@ -8,18 +8,18 @@ Recommended category set:
 
 | Category | Outlook color preset | Outlook color | Purpose |
 | --- | --- | --- | --- |
-| `# Today` | `preset0` | Red | Same-day or urgent attention. |
-| `# This Week` | `preset1` | Orange | Important, but not same-day. |
-| `# Reply` | `preset7` | Blue | Daniel owes a response. |
-| `# Waiting` | `preset3` | Yellow | Daniel is waiting on someone else. |
-| `# Read Later` | `preset10` | Steel | Useful reading, not operationally urgent. |
-| `# FYI` | `preset12` | Gray | Informational; no action expected. |
-| `# Money` | `preset4` | Green | Payments, invoices, banking, reimbursement, procurement. |
-| `# Legal` | `preset9` | Cranberry | Legal, contract, signature, terms, or agreement context. |
-| `# Customer` | `preset8` | Purple | Sensitive customer, clinical, patient-adjacent, or privacy context. |
-| `# Travel` | `preset5` | Teal | Flights, hotels, rides, reservations, itineraries, logistics. |
-| `# Review` | `preset15` | Dark red | Review/ambiguous/safety-held message. |
-| `# Moved` | `preset6` | Olive | Message was moved by DYC automation. |
+| `< Today >` | `preset0` | Red | Same-day or urgent attention. |
+| `< This Week >` | `preset1` | Orange | Important, but not same-day. |
+| `< Reply >` | `preset7` | Blue | Daniel owes a response. |
+| `< Waiting >` | `preset3` | Yellow | Daniel is waiting on someone else. |
+| `< Read Later >` | `preset10` | Steel | Useful reading, not operationally urgent. |
+| `< FYI >` | `preset12` | Gray | Informational; no action expected. |
+| `< Money >` | `preset4` | Green | Payments, invoices, banking, reimbursement, procurement. |
+| `< Legal >` | `preset9` | Cranberry | Legal, contract, signature, terms, or agreement context. |
+| `< Customer >` | `preset8` | Purple | Sensitive customer, clinical, patient-adjacent, or privacy context. |
+| `< Travel >` | `preset5` | Teal | Flights, hotels, rides, reservations, itineraries, logistics. |
+| `< Review >` | `preset15` | Dark red | Review/ambiguous/safety-held message. |
+| `< Moved >` | `preset6` | Olive | Message was moved by DYC automation. |
 
 ## Current Automation Behavior
 
@@ -40,7 +40,7 @@ requests that scope and exposes a guarded diagnostic endpoint:
 POST /mail/categories/bootstrap
 ```
 
-The endpoint creates missing `# ...` categories for every visible connected
+The endpoint creates missing `< ... >` categories for every visible connected
 mailbox that has a usable refresh token. It skips mailboxes that still need
 reconnection or tenant repair.
 
@@ -49,7 +49,7 @@ new scope, colors can still be configured manually in Outlook:
 
 1. Open Outlook.
 2. Go to Categories / Manage categories.
-3. Create the `# ...` categories above.
+3. Create the `< ... >` categories above.
 4. Assign the suggested colors.
 
 BoldWorks currently fails Microsoft sign-in with AADSTS50020, so category

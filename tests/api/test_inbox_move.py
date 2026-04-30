@@ -650,7 +650,7 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
         (
             "graph-token",
             "/me/messages/msg-1",
-            {"categories": ["# Moved", "# FYI"]},
+            {"categories": ["< Moved >", "< FYI >"]},
         )
     ]
     assert persisted[0]["status"] == "succeeded"
@@ -772,7 +772,7 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
         (
             "graph-token",
             "/me/messages/msg-move-1",
-            {"categories": ["# Moved", "# FYI"]},
+            {"categories": ["< Moved >", "< FYI >"]},
         ),
     ]
     assert payload["results"][2]["error"] == "automation_move_limit_reached"
