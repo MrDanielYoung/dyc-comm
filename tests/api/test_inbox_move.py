@@ -565,6 +565,13 @@ def test_activity_log_includes_move_events(monkeypatch):
 def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     _install_account_session(monkeypatch)
     monkeypatch.setenv("OUTLOOK_CATEGORY_LABELS_ENABLED", "true")
+    category_bootstraps: list[str] = []
+
+    async def fake_ensure_categories(access_token):
+        category_bootstraps.append(access_token)
+        return {"created_count": 0, "existing_count": 11, "ensured": []}
+
+    monkeypatch.setattr(main, "_ensure_default_outlook_categories", fake_ensure_categories)
     monkeypatch.setattr(
         main,
         "_automation_health_for_account",
@@ -648,6 +655,7 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     assert payload["automation"] is True
     assert payload["moved"] == 1
     assert payload["skipped"] == 0
+    assert category_bootstraps == ["graph-token"]
     assert graph_calls == [
         ("graph-token", "/me/messages/msg-1/move", {"destinationId": "it-folder-id"})
     ]
@@ -667,6 +675,13 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
 def test_automove_scans_deeper_than_move_limit(monkeypatch):
     _install_account_session(monkeypatch)
     monkeypatch.setenv("OUTLOOK_CATEGORY_LABELS_ENABLED", "true")
+    category_bootstraps: list[str] = []
+
+    async def fake_ensure_categories(access_token):
+        category_bootstraps.append(access_token)
+        return {"created_count": 0, "existing_count": 11, "ensured": []}
+
+    monkeypatch.setattr(main, "_ensure_default_outlook_categories", fake_ensure_categories)
     monkeypatch.setattr(
         main,
         "_automation_health_for_account",
@@ -772,6 +787,7 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
     assert payload["fetched"] == 3
     assert payload["moved"] == 1
     assert payload["skipped"] == 2
+    assert category_bootstraps == ["graph-token"]
     assert graph_calls == [
         ("graph-token", "/me/messages/msg-move-1/move", {"destinationId": "it-folder-id"})
     ]
