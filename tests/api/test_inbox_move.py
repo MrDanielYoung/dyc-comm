@@ -516,6 +516,8 @@ def test_activity_log_includes_move_events(monkeypatch):
                 "forced_review": False,
                 "status": "succeeded",
                 "error": None,
+                "categories_applied": ["< FYI >"],
+                "category_error": None,
                 "requested_by_email": "daniel@danielyoung.io",
                 "requested_at": "2026-04-29T00:00:00+00:00",
                 "completed_at": "2026-04-29T00:00:01+00:00",
@@ -529,6 +531,8 @@ def test_activity_log_includes_move_events(monkeypatch):
                 "forced_review": True,
                 "status": "succeeded",
                 "error": None,
+                "categories_applied": ["< Review >", "< Legal >"],
+                "category_error": None,
                 "requested_by_email": "daniel@danielyoung.io",
                 "requested_at": "2026-04-29T00:00:02+00:00",
                 "completed_at": "2026-04-29T00:00:03+00:00",
@@ -553,6 +557,7 @@ def test_activity_log_includes_move_events(monkeypatch):
     assert events[0]["move"]["destination_folder_name"] == "10 - Review"
     assert events[0]["event_type"] == "message.move.succeeded"
     assert events[1]["move"]["provider_message_id"] == "msg-1"
+    assert events[1]["move"]["categories_applied"] == ["< FYI >"]
     # No pending_instrumentation when movement is available.
     assert payload["pending_instrumentation"] == []
 
@@ -655,6 +660,8 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
     ]
     assert persisted[0]["status"] == "succeeded"
     assert persisted[0]["destination_folder_name"] == "90 - IT Reports"
+    assert persisted[0]["categories_applied"] == ["< FYI >"]
+    assert persisted[0]["category_error"] is None
 
 
 def test_automove_scans_deeper_than_move_limit(monkeypatch):
