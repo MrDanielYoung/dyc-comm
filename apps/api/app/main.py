@@ -3656,11 +3656,20 @@ def _automation_safety_skip_reason(
     return None
 
 
+_DYC_LABEL_NAMES: frozenset[str] = frozenset(
+    spec["displayName"] for spec in DEFAULT_OUTLOOK_CATEGORY_SPECS
+)
+
+
 def _message_categories(message: dict[str, Any]) -> list[str]:
     categories = message.get("categories")
     if not isinstance(categories, list):
         return []
     return [str(category) for category in categories if category]
+
+
+def _has_any_dyc_label(categories: list[str]) -> bool:
+    return any(c in _DYC_LABEL_NAMES for c in categories)
 
 
 def _desired_attention_categories(
@@ -3753,10 +3762,11 @@ async def _backfill_recent_move_labels(
     limit: int = 50,
 ) -> dict[str, Any]:
     if not _outlook_category_labels_enabled():
-        return {"enabled": False, "checked": 0, "updated": 0, "failed": 0}
+        return {"enabled": False, "checked": 0, "updated": 0, "skipped": 0, "failed": 0}
 
     checked = 0
     updated = 0
+    skipped = 0
     failed = 0
     results: list[dict[str, Any]] = []
     for action in _load_move_actions(account_id, limit=limit):
@@ -3764,9 +3774,6 @@ async def _backfill_recent_move_labels(
             continue
         desired_categories = _folder_attention_categories(action.get("destination_folder_name"))
         if not desired_categories:
-            continue
-        existing_audit_categories = action.get("categories_applied") or []
-        if all(category in existing_audit_categories for category in desired_categories):
             continue
 
         provider_message_id = action["provider_message_id"]
@@ -3777,10 +3784,15 @@ async def _backfill_recent_move_labels(
                 f"/me/messages/{provider_message_id}",
                 params={"$select": "id,categories"},
             )
+            actual_categories = _message_categories(message)
+            if _has_any_dyc_label(actual_categories):
+                skipped += 1
+                continue
+
             applied_categories = await _apply_message_categories(
                 access_token,
                 provider_message_id,
-                _message_categories(message),
+                actual_categories,
                 desired_categories,
             )
             _update_move_action_categories(
@@ -3803,7 +3815,7 @@ async def _backfill_recent_move_labels(
             _update_move_action_categories(
                 account_id,
                 provider_message_id,
-                existing_audit_categories,
+                action.get("categories_applied") or [],
                 error,
             )
             results.append(
@@ -3818,6 +3830,7 @@ async def _backfill_recent_move_labels(
         "enabled": True,
         "checked": checked,
         "updated": updated,
+        "skipped": skipped,
         "failed": failed,
         "results": results,
     }
@@ -3897,6 +3910,7 @@ async def _automove_for_account(
         "enabled": _outlook_category_labels_enabled(),
         "checked": 0,
         "updated": 0,
+        "skipped": 0,
         "failed": 0,
     }
     if _outlook_category_labels_enabled() and not label_bootstrap_error:
@@ -3911,6 +3925,7 @@ async def _automove_for_account(
                 "enabled": True,
                 "checked": 0,
                 "updated": 0,
+                "skipped": 0,
                 "failed": 1,
                 "error": _category_apply_error(exc),
             }
