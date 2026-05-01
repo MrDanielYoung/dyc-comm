@@ -3338,6 +3338,44 @@ def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
     ]
 
 
+def _update_move_action_categories(
+    account_id: str,
+    provider_message_id: str,
+    categories_applied: list[str],
+    category_error: str | None,
+) -> None:
+    if not _database_url():
+        return
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE mailbox_move_action
+                    SET categories_applied = %s,
+                        category_error = %s
+                    WHERE account_id = %s
+                      AND provider_message_id = %s
+                      AND status = 'succeeded'
+                    """,
+                    (
+                        json.dumps(categories_applied or []),
+                        category_error,
+                        account_id,
+                        provider_message_id,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to update mailbox_move_action category audit fields.",
+        ) from exc
+
+
 @app.post("/mail/inbox/move")
 async def move_inbox_messages(
     request: Request,
@@ -3628,6 +3666,21 @@ def _desired_attention_categories(
     return list(dict.fromkeys(labels))
 
 
+def _folder_attention_categories(destination_folder_name: str | None) -> list[str]:
+    folder = (destination_folder_name or "").strip()
+    if folder == classifier_module.REVIEW_FOLDER:
+        return ["< Review >"]
+    if folder in {"20 - News", "30 - LinkedIn", "50 - Marketing"}:
+        return ["< Read Later >"]
+    if folder in {"40 - Notifications", "90 - IT Reports"}:
+        return ["< FYI >"]
+    if folder == "70 - Contracts":
+        return ["< Legal >"]
+    if folder == "80 - Travel":
+        return ["< Travel >"]
+    return []
+
+
 async def _apply_message_categories(
     access_token: str,
     provider_message_id: str,
@@ -3656,6 +3709,82 @@ def _category_apply_error(exc: Exception) -> str:
 
 def _outlook_category_labels_enabled() -> bool:
     return _bool_env("OUTLOOK_CATEGORY_LABELS_ENABLED")
+
+
+async def _backfill_recent_move_labels(
+    access_token: str,
+    account_id: str,
+    limit: int = 50,
+) -> dict[str, Any]:
+    if not _outlook_category_labels_enabled():
+        return {"enabled": False, "checked": 0, "updated": 0, "failed": 0}
+
+    checked = 0
+    updated = 0
+    failed = 0
+    results: list[dict[str, Any]] = []
+    for action in _load_move_actions(account_id, limit=limit):
+        if action.get("status") != "succeeded":
+            continue
+        desired_categories = _folder_attention_categories(action.get("destination_folder_name"))
+        if not desired_categories:
+            continue
+        existing_audit_categories = action.get("categories_applied") or []
+        if all(category in existing_audit_categories for category in desired_categories):
+            continue
+
+        provider_message_id = action["provider_message_id"]
+        checked += 1
+        try:
+            message = await _graph_get(
+                access_token,
+                f"/me/messages/{provider_message_id}",
+                params={"$select": "id,categories"},
+            )
+            applied_categories = await _apply_message_categories(
+                access_token,
+                provider_message_id,
+                _message_categories(message),
+                desired_categories,
+            )
+            _update_move_action_categories(
+                account_id,
+                provider_message_id,
+                applied_categories,
+                None,
+            )
+            updated += 1
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "updated",
+                    "categories_applied": applied_categories,
+                }
+            )
+        except Exception as exc:
+            failed += 1
+            error = _category_apply_error(exc)
+            _update_move_action_categories(
+                account_id,
+                provider_message_id,
+                existing_audit_categories,
+                error,
+            )
+            results.append(
+                {
+                    "provider_message_id": provider_message_id,
+                    "status": "failed",
+                    "error": error,
+                }
+            )
+
+    return {
+        "enabled": True,
+        "checked": checked,
+        "updated": updated,
+        "failed": failed,
+        "results": results,
+    }
 
 
 @app.post("/mail/inbox/automove")
@@ -3727,6 +3856,19 @@ async def _automove_for_account(
             await _ensure_default_outlook_categories(access_token)
         except Exception as exc:
             label_bootstrap_error = f"category_bootstrap_failed: {_category_apply_error(exc)}"
+
+    label_backfill = {
+        "enabled": _outlook_category_labels_enabled(),
+        "checked": 0,
+        "updated": 0,
+        "failed": 0,
+    }
+    if _outlook_category_labels_enabled() and not label_bootstrap_error:
+        label_backfill = await _backfill_recent_move_labels(
+            access_token,
+            account_id,
+            limit=move_limit,
+        )
 
     messages = await _list_inbox_messages_paginated(access_token, scan_limit=scan_limit)
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
@@ -3967,6 +4109,7 @@ async def _automove_for_account(
         "already_moved": sum(1 for r in results if r["status"] == "already_moved"),
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
         "failed": sum(1 for r in results if r["status"] == "failed"),
+        "label_backfill": label_backfill,
         "review_folder": classifier_module.REVIEW_FOLDER,
         "results": results,
     }
