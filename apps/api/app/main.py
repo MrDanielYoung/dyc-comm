@@ -3720,6 +3720,14 @@ async def _automove_for_account(
     access_token, account_record = await _graph_access_token_for_email(target["email"])
     account_id = account_record["account_id"]
     account_email = account_record["email"]
+
+    label_bootstrap_error = None
+    if _outlook_category_labels_enabled():
+        try:
+            await _ensure_default_outlook_categories(access_token)
+        except Exception as exc:
+            label_bootstrap_error = f"category_bootstrap_failed: {_category_apply_error(exc)}"
+
     messages = await _list_inbox_messages_paginated(access_token, scan_limit=scan_limit)
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
 
@@ -3866,15 +3874,18 @@ async def _automove_for_account(
                 message,
                 moved=True,
             )
-            try:
-                applied_categories = await _apply_message_categories(
-                    access_token,
-                    provider_message_id,
-                    _message_categories(message),
-                    desired_categories,
-                )
-            except Exception as exc:
-                label_error = _category_apply_error(exc)
+            if label_bootstrap_error:
+                label_error = label_bootstrap_error
+            else:
+                try:
+                    applied_categories = await _apply_message_categories(
+                        access_token,
+                        provider_message_id,
+                        _message_categories(message),
+                        desired_categories,
+                    )
+                except Exception as exc:
+                    label_error = _category_apply_error(exc)
 
         try:
             await _graph_move_message(access_token, provider_message_id, destination_folder_id)
