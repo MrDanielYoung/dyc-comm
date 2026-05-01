@@ -3864,11 +3864,20 @@ async def _automove_for_account(
         "failed": 0,
     }
     if _outlook_category_labels_enabled() and not label_bootstrap_error:
-        label_backfill = await _backfill_recent_move_labels(
-            access_token,
-            account_id,
-            limit=move_limit,
-        )
+        try:
+            label_backfill = await _backfill_recent_move_labels(
+                access_token,
+                account_id,
+                limit=move_limit,
+            )
+        except Exception as exc:
+            label_backfill = {
+                "enabled": True,
+                "checked": 0,
+                "updated": 0,
+                "failed": 1,
+                "error": _category_apply_error(exc),
+            }
 
     messages = await _list_inbox_messages_paginated(access_token, scan_limit=scan_limit)
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
