@@ -3105,7 +3105,8 @@ def _load_dry_run_row(account_id: str, provider_message_id: str) -> dict[str, An
                         category,
                         confidence,
                         confidence_band,
-                        current_folder
+                        current_folder,
+                        safety_flags
                     FROM inbox_dry_run_classification
                     WHERE account_id = %s AND provider_message_id = %s
                     LIMIT 1
@@ -3130,6 +3131,7 @@ def _load_dry_run_row(account_id: str, provider_message_id: str) -> dict[str, An
         "confidence": float(row[5]) if row[5] is not None else 0.0,
         "confidence_band": row[6],
         "current_folder": row[7],
+        "safety_flags": list(row[8] or []),
     }
 
 
@@ -3561,6 +3563,36 @@ async def move_inbox_messages(
             )
             continue
 
+        applied_categories: list[str] = []
+        label_error: str | None = None
+        if _outlook_category_labels_enabled():
+            try:
+                fetched = await _graph_get(
+                    access_token,
+                    f"/me/messages/{provider_message_id}",
+                    params={"$select": "id,categories,subject,bodyPreview"},
+                )
+                reconstructed_decision = classifier_module.ClassificationDecision(
+                    category=dry_run_row.get("category") or "unknown_ambiguous",
+                    recommended_folder=target_name,
+                    confidence=float(dry_run_row.get("confidence") or 0.0),
+                    confidence_band=dry_run_row.get("confidence_band") or "low",
+                    reasons=(),
+                    safety_flags=tuple(dry_run_row.get("safety_flags") or []),
+                    forced_review=forced,
+                )
+                desired_categories = _desired_attention_categories(
+                    reconstructed_decision, fetched, moved=True
+                )
+                applied_categories = await _apply_message_categories(
+                    access_token,
+                    provider_message_id,
+                    _message_categories(fetched),
+                    desired_categories,
+                )
+            except Exception as exc:
+                label_error = _category_apply_error(exc)
+
         _persist_move_action(
             account_id=account_id,
             account_email=account_email,
@@ -3574,6 +3606,8 @@ async def move_inbox_messages(
             status="succeeded",
             error=None,
             completed=True,
+            categories_applied=applied_categories,
+            category_error=label_error,
         )
         results.append(
             {
@@ -3582,6 +3616,8 @@ async def move_inbox_messages(
                 "destination_folder_id": destination_folder_id,
                 "destination_folder_name": resolved_name or target_name,
                 "forced_review": forced,
+                "categories_applied": applied_categories,
+                "category_error": label_error,
             }
         )
 
