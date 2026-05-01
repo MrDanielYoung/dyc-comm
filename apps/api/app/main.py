@@ -864,10 +864,24 @@ def _ensure_account_tables() -> None:
                     forced_review BOOLEAN NOT NULL DEFAULT false,
                     status TEXT NOT NULL DEFAULT 'pending',
                     error TEXT,
+                    categories_applied TEXT,
+                    category_error TEXT,
                     requested_by_email TEXT NOT NULL,
                     requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     completed_at TIMESTAMPTZ
                 )
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE mailbox_move_action
+                ADD COLUMN IF NOT EXISTS categories_applied TEXT
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE mailbox_move_action
+                ADD COLUMN IF NOT EXISTS category_error TEXT
                 """
             )
             cursor.execute(
@@ -2284,6 +2298,8 @@ def activity_log(
                         "forced_review": action["forced_review"],
                         "status": action["status"],
                         "error": action["error"],
+                        "categories_applied": action["categories_applied"],
+                        "category_error": action["category_error"],
                         "requested_by_email": action["requested_by_email"],
                         "requested_at": action["requested_at"],
                         "completed_at": action["completed_at"],
@@ -3173,6 +3189,8 @@ def _persist_move_action(
     status: str,
     error: str | None,
     completed: bool,
+    categories_applied: list[str] | None = None,
+    category_error: str | None = None,
 ) -> str:
     """Insert a mailbox_move_action row. Returns the new row id."""
     action_id = str(uuid.uuid4())
@@ -3199,11 +3217,13 @@ def _persist_move_action(
                         forced_review,
                         status,
                         error,
+                        categories_applied,
+                        category_error,
                         requested_by_email,
                         completed_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            CASE WHEN %s THEN now() ELSE NULL END)
+                            %s, %s, CASE WHEN %s THEN now() ELSE NULL END)
                     """,
                     (
                         action_id,
@@ -3217,6 +3237,8 @@ def _persist_move_action(
                         forced_review,
                         status,
                         error,
+                        json.dumps(categories_applied or []),
+                        category_error,
                         requested_by_email,
                         completed,
                     ),
@@ -3242,6 +3264,20 @@ async def _graph_move_message(
     )
 
 
+def _parse_json_list(raw_value: Any) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [str(value) for value in raw_value if value]
+    try:
+        parsed = json.loads(str(raw_value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(value) for value in parsed if value]
+
+
 def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
     if not _database_url():
         return []
@@ -3263,6 +3299,8 @@ def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
                         forced_review,
                         status,
                         error,
+                        categories_applied,
+                        category_error,
                         requested_by_email,
                         requested_at,
                         completed_at
@@ -3290,9 +3328,11 @@ def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
             "forced_review": bool(row[5]),
             "status": row[6],
             "error": row[7],
-            "requested_by_email": row[8],
-            "requested_at": row[9].isoformat() if row[9] else None,
-            "completed_at": row[10].isoformat() if row[10] else None,
+            "categories_applied": _parse_json_list(row[8]),
+            "category_error": row[9],
+            "requested_by_email": row[10],
+            "requested_at": row[11].isoformat() if row[11] else None,
+            "completed_at": row[12].isoformat() if row[12] else None,
         }
         for row in rows
     ]
@@ -3880,6 +3920,8 @@ async def _automove_for_account(
             status="succeeded",
             error=None,
             completed=True,
+            categories_applied=applied_categories,
+            category_error=label_error,
         )
         moved_count += 1
         results.append(

@@ -973,6 +973,30 @@
         color: var(--muted);
       }
 
+      .activity-labels {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .activity-label {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(63, 126, 194, 0.1);
+        color: var(--accent-deep);
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+
+      .activity-label.error {
+        background: rgba(181, 58, 44, 0.08);
+        color: #b53a2c;
+      }
+
       .nondestructive-banner {
         display: flex;
         align-items: flex-start;
@@ -2795,12 +2819,28 @@
           const destination = move.destination_folder_name || "Folder";
           const status = move.status || "unknown";
           const tag = move.forced_review ? "forced review" : status;
+          const categories = Array.isArray(move.categories_applied)
+            ? move.categories_applied.filter(Boolean)
+            : [];
+          const categoryError = move.category_error || "";
+          const labelHtml = categories.length || categoryError
+            ? `<div class="activity-labels">${
+                categories.map((label) => (
+                  `<span class="activity-label">${escapeHtml(label)}</span>`
+                )).join("")
+              }${
+                categoryError
+                  ? `<span class="activity-label error">Label error: ${escapeHtml(categoryError)}</span>`
+                  : ""
+              }</div>`
+            : "";
           return `
             <div class="activity-row">
               <div>
                 <p class="activity-when">${escapeHtml(formatTimestamp(event.occurred_at))} · ${escapeHtml(event.event_type || "message.move")}</p>
                 <p class="activity-title">Moved to ${escapeHtml(destination)}</p>
                 <p class="activity-account">${escapeHtml(account.email || move.account_email || "")}</p>
+                ${labelHtml}
               </div>
               <span class="folder-entry-tag">${escapeHtml(tag)}</span>
             </div>
