@@ -141,6 +141,7 @@ jobs:
                 ALLOWED_MICROSOFT_TENANT_IDS="$ALLOWED_MICROSOFT_TENANT_IDS" \
                 ALLOWED_ACCOUNT_EMAILS="$ALLOWED_ACCOUNT_EMAILS" \
                 KEY_VAULT_REFS_ENABLED=false \
+                OUTLOOK_CATEGORY_LABELS_ENABLED=true \
               --output none
 
             echo "Container App update complete."
