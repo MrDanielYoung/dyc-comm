@@ -2689,6 +2689,63 @@ def _deterministic_rule_for_message(
     ):
         return "it_reports", 0.95, "perplexity task/repository notification"
 
+    # DMARC and email-authentication reports (aggregate, failure, forensic).
+    if "dmarc" in sender_l or any(
+        phrase in combined
+        for phrase in (
+            "dmarc aggregate report",
+            "dmarc report",
+            "dmarc failure report",
+            "dmarc ruf",
+            "dmarc rua",
+            "spf failure report",
+            "dkim failure report",
+        )
+    ):
+        return "it_reports", 0.95, "dmarc/email-auth report"
+
+    # Autonomous notifications from IT services, providers, and
+    # technology-related monitoring / infrastructure tools.
+    if any(
+        phrase in combined
+        for phrase in (
+            "ssl certificate",
+            "certificate expir",
+            "tls certificate",
+            "uptime report",
+            "downtime alert",
+            "server alert",
+            "backup report",
+            "backup completed",
+            "backup failed",
+            "security report",
+            "vulnerability report",
+            "patch report",
+            "system report",
+            "infrastructure report",
+            "monitoring alert",
+            "disk usage",
+            "memory usage",
+            "cpu usage",
+            "azure monitor",
+            "azure security",
+            "azure advisor",
+            "microsoft defender",
+            "microsoft secure score",
+            "office 365 message center",
+            "microsoft 365 message center",
+            "service health",
+            "service degradation",
+            "incident report",
+            "postmaster",
+            "mail delivery",
+            "delivery status",
+            "spam report",
+            "abuse report",
+        )
+    ):
+        return "it_reports", 0.92, "it service/infrastructure notification"
+
     if any(
         token in combined
         for token in (
