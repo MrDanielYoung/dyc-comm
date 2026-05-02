@@ -2795,8 +2795,15 @@ def _create_classifier_rule(
                     RETURNING id, match_field, pattern, category, confidence,
                               reason, enabled, created_by, created_at
                     """,
-                    (rule_id, match_field, pattern, category, confidence,
-                     reason or None, created_by),
+                    (
+                        rule_id,
+                        match_field,
+                        pattern,
+                        category,
+                        confidence,
+                        reason or None,
+                        created_by,
+                    ),
                 )
                 row = cursor.fetchone()
             connection.commit()
