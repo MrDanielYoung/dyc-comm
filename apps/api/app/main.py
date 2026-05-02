@@ -3397,9 +3397,7 @@ def _parse_json_list(raw_value: Any) -> list[str]:
     return [str(value) for value in parsed if value]
 
 
-def _load_move_actions(
-    account_id: str, limit: int | None = None
-) -> list[dict[str, Any]]:
+def _load_move_actions(account_id: str, limit: int | None = None) -> list[dict[str, Any]]:
     if not _database_url():
         return []
 
