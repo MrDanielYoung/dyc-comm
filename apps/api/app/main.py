@@ -957,6 +957,27 @@ def _ensure_account_tables() -> None:
                 ON mailbox_move_action(account_id, provider_message_id, status)
                 """
             )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS classifier_rule (
+                    id TEXT PRIMARY KEY,
+                    match_field TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    confidence FLOAT NOT NULL DEFAULT 0.95,
+                    reason TEXT,
+                    enabled BOOLEAN NOT NULL DEFAULT true,
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_classifier_rule_enabled
+                ON classifier_rule(enabled)
+                """
+            )
         connection.commit()
 
     _DB_BOOTSTRAPPED = True
@@ -2717,6 +2738,118 @@ def _sender_email_from_graph(message: dict[str, Any]) -> str:
     return ""
 
 
+def _load_classifier_rules() -> list[dict[str, Any]]:
+    if not _database_url():
+        return []
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, match_field, pattern, category, confidence,
+                           reason, enabled, created_by, created_at
+                    FROM classifier_rule
+                    ORDER BY created_at ASC
+                    """
+                )
+                rows = cursor.fetchall()
+    except psycopg.Error as exc:
+        raise HTTPException(status_code=502, detail="Unable to load classifier rules.") from exc
+    return [
+        {
+            "id": row[0],
+            "match_field": row[1],
+            "pattern": row[2],
+            "category": row[3],
+            "confidence": float(row[4]),
+            "reason": row[5] or "",
+            "enabled": bool(row[6]),
+            "created_by": row[7],
+            "created_at": row[8].isoformat() if row[8] else None,
+        }
+        for row in rows
+    ]
+
+
+def _create_classifier_rule(
+    match_field: str,
+    pattern: str,
+    category: str,
+    confidence: float,
+    reason: str,
+    created_by: str,
+) -> dict[str, Any]:
+    _ensure_account_tables()
+    rule_id = str(uuid.uuid4())
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO classifier_rule
+                        (id, match_field, pattern, category, confidence, reason, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, match_field, pattern, category, confidence,
+                              reason, enabled, created_by, created_at
+                    """,
+                    (rule_id, match_field, pattern, category, confidence, reason or None, created_by),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(status_code=502, detail="Unable to create classifier rule.") from exc
+    return {
+        "id": row[0],
+        "match_field": row[1],
+        "pattern": row[2],
+        "category": row[3],
+        "confidence": float(row[4]),
+        "reason": row[5] or "",
+        "enabled": bool(row[6]),
+        "created_by": row[7],
+        "created_at": row[8].isoformat() if row[8] else None,
+    }
+
+
+def _delete_classifier_rule(rule_id: str) -> bool:
+    if not _database_url():
+        return False
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM classifier_rule WHERE id = %s",
+                    (rule_id,),
+                )
+                deleted = cursor.rowcount > 0
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(status_code=502, detail="Unable to delete classifier rule.") from exc
+    return deleted
+
+
+def _set_classifier_rule_enabled(rule_id: str, enabled: bool) -> bool:
+    if not _database_url():
+        return False
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE classifier_rule SET enabled = %s WHERE id = %s",
+                    (enabled, rule_id),
+                )
+                updated = cursor.rowcount > 0
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(status_code=502, detail="Unable to update classifier rule.") from exc
+    return updated
+
+
 def _deterministic_rule_for_message(
     *,
     subject: str,
@@ -2732,6 +2865,22 @@ def _deterministic_rule_for_message(
     sender_l = sender.casefold()
     subject_l = subject.casefold()
     combined = f"{subject}\n{body_preview}".casefold()
+
+    for rule in _load_classifier_rules():
+        if not rule.get("enabled"):
+            continue
+        field = rule["match_field"]
+        pattern = rule["pattern"].casefold()
+        if field == "sender":
+            target = sender_l
+        elif field == "subject":
+            target = subject_l
+        elif field == "body":
+            target = body_preview.casefold()
+        else:
+            target = combined
+        if pattern in target:
+            return rule["category"], float(rule["confidence"]), rule.get("reason") or "user rule"
 
     if (
         "github.com" in sender_l
@@ -3143,6 +3292,82 @@ def classify_inbox_dryrun_log(
         "entries": entries,
         "review_folder": classifier_module.REVIEW_FOLDER,
     }
+
+
+@app.get("/classifier/rules")
+def list_classifier_rules(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    _resolve_session_user_email(linked_email)
+    return {"rules": _load_classifier_rules()}
+
+
+@app.post("/classifier/rules")
+async def create_classifier_rule(
+    request: Request,
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    user_email = _resolve_session_user_email(linked_email)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+
+    match_field = str(body.get("match_field") or "").strip()
+    pattern = str(body.get("pattern") or "").strip()
+    category = str(body.get("category") or "").strip()
+    confidence = float(body.get("confidence") or 0.95)
+    reason = str(body.get("reason") or "").strip()
+
+    if match_field not in ("sender", "subject", "body", "any"):
+        raise HTTPException(status_code=400, detail="match_field must be sender, subject, body, or any.")
+    if not pattern:
+        raise HTTPException(status_code=400, detail="pattern is required.")
+    if category not in classifier_module.ALLOWED_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"category must be one of: {', '.join(classifier_module.ALLOWED_CATEGORIES)}")
+    if not (0.0 < confidence <= 1.0):
+        raise HTTPException(status_code=400, detail="confidence must be between 0.0 and 1.0.")
+
+    rule = _create_classifier_rule(
+        match_field=match_field,
+        pattern=pattern,
+        category=category,
+        confidence=confidence,
+        reason=reason,
+        created_by=user_email,
+    )
+    return rule
+
+
+@app.delete("/classifier/rules/{rule_id}")
+def delete_classifier_rule(
+    rule_id: str,
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    _resolve_session_user_email(linked_email)
+    deleted = _delete_classifier_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return {"deleted": True, "id": rule_id}
+
+
+@app.patch("/classifier/rules/{rule_id}")
+async def update_classifier_rule(
+    rule_id: str,
+    request: Request,
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    _resolve_session_user_email(linked_email)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    if "enabled" not in body:
+        raise HTTPException(status_code=400, detail="enabled field is required.")
+    updated = _set_classifier_rule_enabled(rule_id, bool(body["enabled"]))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Rule not found.")
+    return {"updated": True, "id": rule_id, "enabled": bool(body["enabled"])}
 
 
 # =========================================================================
