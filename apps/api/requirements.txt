@@ -2,3 +2,4 @@ fastapi==0.115.0
 uvicorn==0.30.6
 httpx==0.27.2
 psycopg[binary]==3.2.9
+azure-communication-sms==1.0.1

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -62,7 +63,53 @@ DEFAULT_OUTLOOK_CATEGORY_SPECS = (
     {"displayName": "< Customer >", "color": "preset8"},
     {"displayName": "< Travel >", "color": "preset5"},
     {"displayName": "< Review >", "color": "preset15"},
+    {"displayName": "< Pay This >", "color": "preset2"},
 )
+
+_URGENT_PHRASES: tuple[str, ...] = (
+    "urgent",
+    "asap",
+    "immediately",
+    "right away",
+    "time sensitive",
+    "as soon as possible",
+    "need to hear from you by",
+    "respond by",
+    "reply by",
+    "get back to me by",
+    "no later than",
+    "deadline is",
+    "need your response",
+    "need a response",
+    "due today",
+    "by end of day",
+    "by eod",
+    "by cob",
+    "reminder",
+    "following up",
+    "just checking in",
+    "circling back",
+    "haven't heard back",
+    "wanted to follow up",
+    "second request",
+    "final notice",
+    "last chance",
+)
+
+_INVOICE_PHRASES: tuple[str, ...] = (
+    "invoice",
+    "payment due",
+    "amount due",
+    "balance due",
+    "please remit",
+    "remittance",
+    "payment requested",
+    "attached invoice",
+    "bill for services",
+    "statement of account",
+    "due on receipt",
+)
+
 _DB_BOOTSTRAPPED = False
 
 # Runtime env-var contract reported by /config-check. Mirrors the variables
@@ -91,6 +138,10 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     ("AZURE_AI_DEPLOYMENT", False),
     ("AZURE_AI_API_KEY", True),
     ("AUTOMATION_RUN_TOKEN", True),
+    # Azure Communication Services — SMS urgent alerts.
+    ("ACS_CONNECTION_STRING", True),
+    ("ACS_FROM_NUMBER", False),
+    ("ALERT_PHONE_NUMBER", False),
 )
 
 # Env vars that are optional / advisory. Their absence must NOT cause
@@ -109,6 +160,9 @@ _OPTIONAL_RUNTIME_VARIABLES: frozenset[str] = frozenset(
         "AZURE_AI_DEPLOYMENT",
         "AZURE_AI_API_KEY",
         "AUTOMATION_RUN_TOKEN",
+        "ACS_CONNECTION_STRING",
+        "ACS_FROM_NUMBER",
+        "ALERT_PHONE_NUMBER",
     }
 )
 
@@ -882,6 +936,12 @@ def _ensure_account_tables() -> None:
                 """
                 ALTER TABLE mailbox_move_action
                 ADD COLUMN IF NOT EXISTS category_error TEXT
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE mailbox_move_action
+                ADD COLUMN IF NOT EXISTS sms_notified_at TIMESTAMPTZ
                 """
             )
             cursor.execute(
@@ -3764,6 +3824,8 @@ def _desired_attention_categories(
         labels.append("< Today >")
     elif any(word in combined for word in ("this week", "by friday", "deadline")):
         labels.append("< This Week >")
+    if any(phrase in combined for phrase in _INVOICE_PHRASES):
+        labels.append("< Pay This >")
 
     return list(dict.fromkeys(labels))
 
@@ -3811,6 +3873,91 @@ def _category_apply_error(exc: Exception) -> str:
 
 def _outlook_category_labels_enabled() -> bool:
     return _bool_env("OUTLOOK_CATEGORY_LABELS_ENABLED")
+
+
+def _sms_alerts_enabled() -> bool:
+    return bool(
+        os.getenv("ACS_CONNECTION_STRING")
+        and os.getenv("ACS_FROM_NUMBER")
+        and os.getenv("ALERT_PHONE_NUMBER")
+    )
+
+
+def _is_pay_this_message(message: dict[str, Any]) -> bool:
+    subject = str(message.get("subject") or "").lower()
+    body = str(message.get("bodyPreview") or "").lower()
+    combined = f"{subject}\n{body}"
+    return any(phrase in combined for phrase in _INVOICE_PHRASES)
+
+
+def _is_sms_urgent(
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+) -> bool:
+    if decision.category != "human_direct" or decision.confidence < 0.85:
+        return False
+    subject = str(message.get("subject") or "").lower()
+    body = str(message.get("bodyPreview") or "").lower()
+    combined = f"{subject}\n{body}"
+    return any(phrase in combined for phrase in _URGENT_PHRASES)
+
+
+def _sms_already_sent(account_id: str, provider_message_id: str) -> bool:
+    if not _database_url():
+        return False
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT 1 FROM mailbox_move_action
+                    WHERE account_id = %s
+                      AND provider_message_id = %s
+                      AND sms_notified_at IS NOT NULL
+                    LIMIT 1
+                    """,
+                    (account_id, provider_message_id),
+                )
+                return cursor.fetchone() is not None
+    except psycopg.Error:
+        return False
+
+
+def _record_sms_sent(account_id: str, provider_message_id: str) -> None:
+    if not _database_url():
+        return
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE mailbox_move_action
+                    SET sms_notified_at = now()
+                    WHERE account_id = %s
+                      AND provider_message_id = %s
+                      AND status = 'succeeded'
+                    """,
+                    (account_id, provider_message_id),
+                )
+            connection.commit()
+    except psycopg.Error:
+        pass
+
+
+def _send_sms_alert(subject: str, sender_email: str, reason: str) -> None:
+    from azure.communication.sms import SmsClient
+
+    connection_string = os.getenv("ACS_CONNECTION_STRING", "")
+    from_number = os.getenv("ACS_FROM_NUMBER", "")
+    to_number = os.getenv("ALERT_PHONE_NUMBER", "")
+    if reason == "pay_this":
+        body = f"Invoice to pay: {subject} (from {sender_email})"
+    else:
+        body = f"Urgent email: {subject} (from {sender_email})"
+    client = SmsClient.from_connection_string(connection_string)
+    client.send(from_=from_number, to=[to_number], message=body)
 
 
 async def _backfill_recent_move_labels(
@@ -4194,6 +4341,25 @@ async def _automove_for_account(
             category_error=label_error,
         )
         moved_count += 1
+
+        sms_reason: str | None = None
+        if _sms_alerts_enabled() and not _sms_already_sent(account_id, provider_message_id):
+            if "< Pay This >" in applied_categories:
+                sms_reason = "pay_this"
+            elif _is_sms_urgent(decision, message):
+                sms_reason = "urgent"
+        if sms_reason:
+            try:
+                await asyncio.to_thread(
+                    _send_sms_alert,
+                    message.get("subject") or "",
+                    _sender_email_from_graph(message),
+                    sms_reason,
+                )
+                _record_sms_sent(account_id, provider_message_id)
+            except Exception:
+                logger.exception("sms.alert.failed message_id=%s", provider_message_id)
+
         results.append(
             {
                 "provider_message_id": provider_message_id,
@@ -4205,6 +4371,7 @@ async def _automove_for_account(
                 "moved": True,
                 "categories_applied": applied_categories,
                 "category_error": label_error,
+                "sms_sent": sms_reason is not None,
             }
         )
 
