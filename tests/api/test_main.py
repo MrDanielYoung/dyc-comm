@@ -129,7 +129,9 @@ def test_config_check_reflects_set_env(monkeypatch):
     monkeypatch.setenv("AZURE_AI_DEPLOYMENT", "phi-4")
     monkeypatch.setenv("AZURE_AI_API_KEY", azure_ai_key)
     monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "automation-run-token")
-    monkeypatch.setenv("ACS_CONNECTION_STRING", "endpoint=https://example.communication.azure.com;accesskey=fake")
+    monkeypatch.setenv(
+        "ACS_CONNECTION_STRING", "endpoint=https://example.communication.azure.com;accesskey=fake"
+    )
     monkeypatch.setenv("ACS_FROM_NUMBER", "+15550001234")
     monkeypatch.setenv("ALERT_PHONE_NUMBER", "+15550005678")
 
