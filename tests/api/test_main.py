@@ -27,6 +27,9 @@ RUNTIME_VARIABLES = (
     "AZURE_AI_DEPLOYMENT",
     "AZURE_AI_API_KEY",
     "AUTOMATION_RUN_TOKEN",
+    "ACS_CONNECTION_STRING",
+    "ACS_FROM_NUMBER",
+    "ALERT_PHONE_NUMBER",
 )
 
 SECRET_VARIABLES = {
@@ -35,6 +38,7 @@ SECRET_VARIABLES = {
     "AZURE_OPENAI_API_KEY",
     "AZURE_AI_API_KEY",
     "AUTOMATION_RUN_TOKEN",
+    "ACS_CONNECTION_STRING",
 }
 
 DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
@@ -1174,11 +1178,11 @@ def test_bootstrap_categories_creates_missing_for_visible_accounts(monkeypatch):
     ]
     assert body["accounts"][0]["status"] == "succeeded"
     assert body["accounts"][0]["existing_count"] == 1
-    assert body["accounts"][0]["created_count"] == 10
+    assert body["accounts"][0]["created_count"] == 11
     assert body["accounts"][1]["status"] == "succeeded"
     assert body["accounts"][2]["status"] == "skipped"
     assert body["accounts"][2]["reason"] == "mailbox_access_not_ready"
-    assert len(created) == 20
+    assert len(created) == 22
     assert (
         "token:daniel@danielyoung.io",
         "/me/outlook/masterCategories",
