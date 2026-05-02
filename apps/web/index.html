@@ -1641,6 +1641,15 @@
                     class="tab"
                     role="tab"
                     type="button"
+                    id="tab-rules"
+                    data-tab="rules"
+                    aria-selected="false"
+                    aria-controls="panel-rules"
+                  >Classifier Rules</button>
+                  <button
+                    class="tab"
+                    role="tab"
+                    type="button"
                     id="tab-api"
                     data-tab="api"
                     aria-selected="false"
@@ -2074,6 +2083,85 @@
 
               <section
                 role="tabpanel"
+                id="panel-rules"
+                aria-labelledby="tab-rules"
+                hidden
+              >
+                <div class="shell">
+                  <section class="panel section-panel" data-testid="rules-panel">
+                    <h2 class="section-title">Classifier Rules</h2>
+                    <p class="empty-state">
+                      Rules run <strong>before</strong> the AI and act as hard overrides.
+                      Use them to correct misclassifications without redeploying.
+                    </p>
+
+                    <form id="rulesAddForm" class="action-row" style="flex-wrap:wrap;gap:8px;align-items:flex-end;">
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <label style="font-size:0.78rem;font-weight:600;" for="ruleMatchField">Match on</label>
+                        <select id="ruleMatchField" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;">
+                          <option value="sender">Sender</option>
+                          <option value="subject">Subject</option>
+                          <option value="body">Body</option>
+                          <option value="any">Any (subject + body)</option>
+                        </select>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <label style="font-size:0.78rem;font-weight:600;" for="rulePattern">Contains</label>
+                        <input id="rulePattern" type="text" placeholder="e.g. dmarcreport@microsoft.com" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:220px;" />
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <label style="font-size:0.78rem;font-weight:600;" for="ruleCategory">Category</label>
+                        <select id="ruleCategory" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;">
+                          <option value="it_reports">IT Reports (90 - IT Reports)</option>
+                          <option value="notifications_system">Notifications (40 - Notifications)</option>
+                          <option value="newsletters_news">News (20 - News)</option>
+                          <option value="marketing_promotions">Marketing (50 - Marketing)</option>
+                          <option value="service_updates">Service Updates</option>
+                          <option value="meetings_scheduling">Meetings &amp; Scheduling</option>
+                          <option value="finance_money">Finance / Money</option>
+                          <option value="legal_contracts">Legal / Contracts</option>
+                          <option value="health_family">Health &amp; Family</option>
+                          <option value="access_auth">Access &amp; Auth</option>
+                          <option value="human_direct">Direct / Human Reply</option>
+                          <option value="unknown_ambiguous">Ambiguous → Review</option>
+                        </select>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <label style="font-size:0.78rem;font-weight:600;" for="ruleConfidence">Confidence</label>
+                        <input id="ruleConfidence" type="number" value="0.95" min="0.01" max="1.0" step="0.01" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:80px;" />
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:4px;">
+                        <label style="font-size:0.78rem;font-weight:600;" for="ruleReason">Note (optional)</label>
+                        <input id="ruleReason" type="text" placeholder="e.g. DMARC reports" style="padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:160px;" />
+                      </div>
+                      <button class="primary" type="submit" id="rulesAddButton" style="align-self:flex-end;">Add Rule</button>
+                    </form>
+                    <p class="metric-reason" id="rulesStatus" style="margin-top:8px;"></p>
+
+                    <div class="sorting-table-wrap" style="margin-top:16px;">
+                      <table class="sorting-table" id="rulesTable">
+                        <thead>
+                          <tr>
+                            <th>Match on</th>
+                            <th>Contains</th>
+                            <th>Category</th>
+                            <th>Confidence</th>
+                            <th>Note</th>
+                            <th>Enabled</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody id="rulesTableBody">
+                          <tr><td colspan="7" class="empty-state">Loading rules…</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                </div>
+              </section>
+
+              <section
+                role="tabpanel"
                 id="panel-api"
                 aria-labelledby="tab-api"
                 hidden
@@ -2254,6 +2342,7 @@
         sorting: document.getElementById("panel-sorting"),
         activity: document.getElementById("panel-activity"),
         alerts: document.getElementById("panel-alerts"),
+        rules: document.getElementById("panel-rules"),
         api: document.getElementById("panel-api"),
       };
       const accountNavList = document.getElementById("accountNavList");
@@ -2766,6 +2855,8 @@
           loadAlerts().catch(() => {});
         } else if (tabName === "sorting") {
           loadSortingLog().catch(() => {});
+        } else if (tabName === "rules") {
+          loadRules().catch(() => {});
         }
       }
 
@@ -2914,6 +3005,146 @@
           alertsList.innerHTML =
             `<p class="empty-state">Alerts request failed: ${escapeHtml(error.message)}.</p>`;
         }
+      }
+
+      const CATEGORY_LABELS = {
+        it_reports: "IT Reports",
+        notifications_system: "Notifications",
+        newsletters_news: "News",
+        marketing_promotions: "Marketing",
+        service_updates: "Service Updates",
+        meetings_scheduling: "Meetings & Scheduling",
+        finance_money: "Finance / Money",
+        legal_contracts: "Legal / Contracts",
+        health_family: "Health & Family",
+        access_auth: "Access & Auth",
+        human_direct: "Direct / Human Reply",
+        unknown_ambiguous: "Ambiguous → Review",
+      };
+
+      const FIELD_LABELS = { sender: "Sender", subject: "Subject", body: "Body", any: "Any" };
+
+      async function loadRules() {
+        const tbody = document.getElementById("rulesTableBody");
+        if (!tbody) return;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Loading…</td></tr>`;
+        try {
+          const response = await fetch(`${API_BASE}/classifier/rules`, { credentials: "include" });
+          if (!response.ok) {
+            tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Failed to load rules (${response.status}).</td></tr>`;
+            return;
+          }
+          const payload = await response.json();
+          renderRules(payload.rules || []);
+        } catch (err) {
+          tbody.innerHTML = `<tr><td colspan="7" class="empty-state">Error: ${escapeHtml(err.message)}</td></tr>`;
+        }
+      }
+
+      function renderRules(rules) {
+        const tbody = document.getElementById("rulesTableBody");
+        if (!tbody) return;
+        if (!rules.length) {
+          tbody.innerHTML = `<tr><td colspan="7" class="empty-state">No rules yet. Add one above.</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = rules.map(rule => `
+          <tr data-rule-id="${escapeHtml(rule.id)}">
+            <td>${escapeHtml(FIELD_LABELS[rule.match_field] || rule.match_field)}</td>
+            <td><code>${escapeHtml(rule.pattern)}</code></td>
+            <td>${escapeHtml(CATEGORY_LABELS[rule.category] || rule.category)}</td>
+            <td>${escapeHtml(String(rule.confidence))}</td>
+            <td>${escapeHtml(rule.reason || "—")}</td>
+            <td>
+              <button
+                class="secondary"
+                type="button"
+                style="padding:2px 10px;font-size:0.78rem;"
+                onclick="toggleRule('${escapeHtml(rule.id)}', ${!rule.enabled})"
+              >${rule.enabled ? "Enabled" : "Disabled"}</button>
+            </td>
+            <td>
+              <button
+                class="secondary"
+                type="button"
+                style="padding:2px 10px;font-size:0.78rem;color:var(--danger,#c0392b);"
+                onclick="deleteRule('${escapeHtml(rule.id)}')"
+              >Delete</button>
+            </td>
+          </tr>
+        `).join("");
+      }
+
+      async function deleteRule(ruleId) {
+        if (!confirm("Delete this rule?")) return;
+        try {
+          const response = await fetch(`${API_BASE}/classifier/rules/${encodeURIComponent(ruleId)}`, {
+            method: "DELETE",
+            credentials: "include",
+          });
+          if (!response.ok) throw new Error(`${response.status}`);
+          await loadRules();
+        } catch (err) {
+          const status = document.getElementById("rulesStatus");
+          if (status) status.textContent = `Delete failed: ${err.message}`;
+        }
+      }
+
+      async function toggleRule(ruleId, enabled) {
+        try {
+          const response = await fetch(`${API_BASE}/classifier/rules/${encodeURIComponent(ruleId)}`, {
+            method: "PATCH",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+          });
+          if (!response.ok) throw new Error(`${response.status}`);
+          await loadRules();
+        } catch (err) {
+          const status = document.getElementById("rulesStatus");
+          if (status) status.textContent = `Update failed: ${err.message}`;
+        }
+      }
+
+      const rulesAddForm = document.getElementById("rulesAddForm");
+      if (rulesAddForm) {
+        rulesAddForm.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const status = document.getElementById("rulesStatus");
+          const btn = document.getElementById("rulesAddButton");
+          const matchField = document.getElementById("ruleMatchField").value;
+          const pattern = document.getElementById("rulePattern").value.trim();
+          const category = document.getElementById("ruleCategory").value;
+          const confidence = parseFloat(document.getElementById("ruleConfidence").value);
+          const reason = document.getElementById("ruleReason").value.trim();
+
+          if (!pattern) {
+            if (status) status.textContent = "Pattern is required.";
+            return;
+          }
+          if (btn) btn.disabled = true;
+          if (status) status.textContent = "Saving…";
+          try {
+            const response = await fetch(`${API_BASE}/classifier/rules`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ match_field: matchField, pattern, category, confidence, reason }),
+            });
+            if (!response.ok) {
+              const err = await response.json().catch(() => ({}));
+              throw new Error(err.detail || String(response.status));
+            }
+            document.getElementById("rulePattern").value = "";
+            document.getElementById("ruleReason").value = "";
+            if (status) status.textContent = "Rule added.";
+            await loadRules();
+          } catch (err) {
+            if (status) status.textContent = `Failed: ${err.message}`;
+          } finally {
+            if (btn) btn.disabled = false;
+          }
+        });
       }
 
       function setSortingStatus(text, tone) {
