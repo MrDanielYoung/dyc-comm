@@ -2795,7 +2795,8 @@ def _create_classifier_rule(
                     RETURNING id, match_field, pattern, category, confidence,
                               reason, enabled, created_by, created_at
                     """,
-                    (rule_id, match_field, pattern, category, confidence, reason or None, created_by),
+                    (rule_id, match_field, pattern, category, confidence,
+                     reason or None, created_by),
                 )
                 row = cursor.fetchone()
             connection.commit()
@@ -3320,11 +3321,18 @@ async def create_classifier_rule(
     reason = str(body.get("reason") or "").strip()
 
     if match_field not in ("sender", "subject", "body", "any"):
-        raise HTTPException(status_code=400, detail="match_field must be sender, subject, body, or any.")
+        raise HTTPException(
+            status_code=400,
+            detail="match_field must be sender, subject, body, or any.",
+        )
     if not pattern:
         raise HTTPException(status_code=400, detail="pattern is required.")
     if category not in classifier_module.ALLOWED_CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"category must be one of: {', '.join(classifier_module.ALLOWED_CATEGORIES)}")
+        allowed = ", ".join(classifier_module.ALLOWED_CATEGORIES)
+        raise HTTPException(
+            status_code=400,
+            detail=f"category must be one of: {allowed}",
+        )
     if not (0.0 < confidence <= 1.0):
         raise HTTPException(status_code=400, detail="confidence must be between 0.0 and 1.0.")
 
