@@ -3397,7 +3397,7 @@ def _parse_json_list(raw_value: Any) -> list[str]:
     return [str(value) for value in parsed if value]
 
 
-def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
+def _load_move_actions(account_id: str, limit: int | None = None) -> list[dict[str, Any]]:
     if not _database_url():
         return []
 
@@ -3407,8 +3407,7 @@ def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
     try:
         with _get_connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
+                query = """
                     SELECT
                         provider_message_id,
                         account_email,
@@ -3426,10 +3425,11 @@ def _load_move_actions(account_id: str, limit: int) -> list[dict[str, Any]]:
                     FROM mailbox_move_action
                     WHERE account_id = %s
                     ORDER BY requested_at DESC
-                    LIMIT %s
-                    """,
-                    (account_id, limit),
-                )
+                    """
+                if limit is None:
+                    cursor.execute(query, (account_id,))
+                else:
+                    cursor.execute(query + " LIMIT %s", (account_id, limit))
                 rows = cursor.fetchall()
     except psycopg.Error as exc:
         raise HTTPException(
@@ -4494,6 +4494,107 @@ async def run_scheduled_automation(
         "message_skipped": sum(int(r.get("skipped") or 0) for r in account_results),
         "message_failed": sum(int(r.get("failed") or 0) for r in account_results),
         "results": account_results,
+    }
+
+
+@app.post("/automation/backfill-labels")
+async def backfill_all_labels(request: Request) -> dict[str, Any]:
+    """Retroactively apply Outlook labels to every previously moved message.
+
+    Sweeps the full mailbox_move_action history (no recency limit) for all
+    connected accounts. For each succeeded move, fetches the actual message
+    from Graph and applies the folder-appropriate label if no DYC label is
+    present. Safe to run multiple times — messages that already have a DYC
+    label are skipped.
+    """
+    _require_automation_run_token(request)
+
+    if not _outlook_category_labels_enabled():
+        return {
+            "enabled": False,
+            "generated_at": _utcnow().isoformat(),
+            "accounts": [],
+        }
+
+    accounts = _list_automation_accounts()
+    account_results: list[dict[str, Any]] = []
+
+    for account_row in accounts:
+        account_email = account_row["email"]
+        try:
+            access_token, account_record = await _graph_access_token_for_email(account_email)
+            account_id = account_record["account_id"]
+
+            checked = 0
+            updated = 0
+            skipped = 0
+            failed = 0
+
+            for action in _load_move_actions(account_id, limit=None):
+                if action.get("status") != "succeeded":
+                    continue
+                desired_categories = _folder_attention_categories(
+                    action.get("destination_folder_name")
+                )
+                if not desired_categories:
+                    continue
+
+                provider_message_id = action["provider_message_id"]
+                checked += 1
+                try:
+                    message = await _graph_get(
+                        access_token,
+                        f"/me/messages/{provider_message_id}",
+                        params={"$select": "id,categories"},
+                    )
+                    actual_categories = _message_categories(message)
+                    if _has_any_dyc_label(actual_categories):
+                        skipped += 1
+                        continue
+                    applied = await _apply_message_categories(
+                        access_token,
+                        provider_message_id,
+                        actual_categories,
+                        desired_categories,
+                    )
+                    _update_move_action_categories(account_id, provider_message_id, applied, None)
+                    updated += 1
+                except Exception as exc:
+                    failed += 1
+                    _update_move_action_categories(
+                        account_id,
+                        provider_message_id,
+                        action.get("categories_applied") or [],
+                        _category_apply_error(exc),
+                    )
+
+            account_results.append(
+                {
+                    "account": account_email,
+                    "status": "completed",
+                    "checked": checked,
+                    "updated": updated,
+                    "skipped": skipped,
+                    "failed": failed,
+                }
+            )
+        except Exception as exc:
+            account_results.append(
+                {
+                    "account": account_email,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "enabled": True,
+        "generated_at": _utcnow().isoformat(),
+        "accounts": account_results,
+        "total_checked": sum(int(r.get("checked") or 0) for r in account_results),
+        "total_updated": sum(int(r.get("updated") or 0) for r in account_results),
+        "total_skipped": sum(int(r.get("skipped") or 0) for r in account_results),
+        "total_failed": sum(int(r.get("failed") or 0) for r in account_results),
     }
 
 
