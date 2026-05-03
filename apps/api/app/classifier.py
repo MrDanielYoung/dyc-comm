@@ -66,8 +66,9 @@ SENSITIVE_KEYWORDS: tuple[str, ...] = (
     "protected health",
     "diagnosis",
     "medical record",
-    "clinical",
-    "biotronik",
+    "clinical trial",
+    "clinical patient",
+    "clinical data",
     "implant",
     "pacemaker",
     "customer complaint",
@@ -126,7 +127,10 @@ JUDGMENT_PHRASES: tuple[str, ...] = (
 
 # Minimum body length (in non-whitespace characters) before we trust any
 # specific-folder routing. Below this we always route to Review.
-SHORT_BODY_MIN_CHARS = 40
+# Set low (20) because HTML-heavy automated emails (receipts, statements,
+# transfer confirmations) often produce very short plain-text body previews
+# via the Graph API even when the actual email is substantive.
+SHORT_BODY_MIN_CHARS = 20
 
 
 @dataclass(frozen=True)

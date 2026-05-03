@@ -2907,6 +2907,8 @@ def _deterministic_rule_for_message(
         return "it_reports", 0.95, "perplexity task/repository notification"
 
     # DMARC and email-authentication reports (aggregate, failure, forensic).
+    # Matches both Microsoft format ("DMARC report") and Google/RFC-7489
+    # format ("Report domain: X Submitter: Y Report-ID: Z").
     if "dmarc" in sender_l or any(
         phrase in combined
         for phrase in (
@@ -2917,6 +2919,10 @@ def _deterministic_rule_for_message(
             "dmarc rua",
             "spf failure report",
             "dkim failure report",
+            "report domain:",
+            "submitter: google.com",
+            "submitter: microsoft.com",
+            "submitter: yahoo.com",
         )
     ):
         return "it_reports", 0.95, "dmarc/email-auth report"
@@ -2975,6 +2981,71 @@ def _deterministic_rule_for_message(
         )
     ):
         return "it_reports", 0.85, "repository/build notification"
+
+    # Billing, invoices, and payment receipts. Broad match on common
+    # transactional subjects across all three inboxes (EN + DE).
+    if any(
+        phrase in combined
+        for phrase in (
+            "your receipt",
+            "purchase receipt",
+            "payment receipt",
+            "your invoice",
+            "invoice is available",
+            "invoice for",
+            "your bill",
+            "your statement",
+            "statement is available",
+            "statement is now available",
+            "monatsabrechnung",
+            "ihre rechnung",
+            "zahlungsbestätigung",
+            "received payment",
+            "received $",
+            "received €",
+            "transfer completed",
+            "payment for",
+            "subscription renewal",
+            "will debit your account",
+            "direct debit",
+            "lastschrift",
+        )
+    ):
+        return "money", 0.88, "billing/payment/invoice notification"
+
+    # Marketing newsletters and promotional emails (EN + DE).
+    if any(
+        phrase in combined
+        for phrase in (
+            "rabatt sichern",
+            "exklusives angebot",
+            "angebot:",
+            "% off",
+            "% rabatt",
+            "unsubscribe",
+            "abmelden",
+            "view in browser",
+            "im browser anzeigen",
+        )
+    ):
+        return "marketing", 0.82, "promotional/marketing email"
+
+    # News digests and newsletters.
+    if any(
+        phrase in combined
+        for phrase in (
+            "daily news:",
+            "daily digest",
+            "weekly digest",
+            "weekly roundup",
+            "newsletter",
+            "digest:",
+            "bulletin:",
+            " bulletin",
+            "online first:",
+        )
+    ):
+        return "notifications_system", 0.82, "news digest or newsletter"
 
     if any(
         token in sender_l
