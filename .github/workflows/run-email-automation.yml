@@ -2,6 +2,23 @@ name: Run Email Automation
 
 on:
   workflow_dispatch:
+    inputs:
+      limit:
+        description: "Inbox messages to scan per account"
+        required: false
+        default: "100"
+      move_limit:
+        description: "Maximum messages to move per account"
+        required: false
+        default: "50"
+      scan_order:
+        description: "Which side of the inbox to scan"
+        required: false
+        default: "newest"
+        type: choice
+        options:
+          - newest
+          - oldest
   schedule:
     - cron: "*/6 * * * *"
 
@@ -21,10 +38,25 @@ jobs:
       - name: Call production automation runner
         env:
           AUTOMATION_RUN_TOKEN: ${{ secrets.AUTOMATION_RUN_TOKEN }}
+          RUN_LIMIT: ${{ github.event.inputs.limit || '100' }}
+          MOVE_LIMIT: ${{ github.event.inputs.move_limit || '50' }}
+          SCAN_ORDER: ${{ github.event.inputs.scan_order || 'newest' }}
         run: |
           set -euo pipefail
           if [ -z "${AUTOMATION_RUN_TOKEN:-}" ]; then
             echo "::error::AUTOMATION_RUN_TOKEN GitHub secret is not configured."
+            exit 1
+          fi
+          if ! [[ "${RUN_LIMIT}" =~ ^[0-9]+$ ]] || [ "${RUN_LIMIT}" -lt 1 ] || [ "${RUN_LIMIT}" -gt 500 ]; then
+            echo "::error::limit must be an integer from 1 to 500."
+            exit 1
+          fi
+          if ! [[ "${MOVE_LIMIT}" =~ ^[0-9]+$ ]] || [ "${MOVE_LIMIT}" -lt 1 ] || [ "${MOVE_LIMIT}" -gt 100 ]; then
+            echo "::error::move_limit must be an integer from 1 to 100."
+            exit 1
+          fi
+          if [ "${SCAN_ORDER}" != "newest" ] && [ "${SCAN_ORDER}" != "oldest" ]; then
+            echo "::error::scan_order must be newest or oldest."
             exit 1
           fi
 
@@ -32,6 +64,6 @@ jobs:
             --max-time 540 \
             -X POST \
             -H "Authorization: Bearer ${AUTOMATION_RUN_TOKEN}" \
-            "https://api.comm.danielyoung.io/automation/run?limit=100&move_limit=50")"
+            "https://api.comm.danielyoung.io/automation/run?limit=${RUN_LIMIT}&move_limit=${MOVE_LIMIT}&scan_order=${SCAN_ORDER}")"
 
           echo "${response}"

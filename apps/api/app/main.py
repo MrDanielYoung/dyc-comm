@@ -2687,18 +2687,19 @@ async def _list_inbox_messages(access_token: str, limit: int) -> list[dict[str, 
 
 
 async def _list_inbox_messages_paginated(
-    access_token: str, scan_limit: int
+    access_token: str, scan_limit: int, scan_order: str = "newest"
 ) -> list[dict[str, Any]]:
-    """Fetch a bounded page-walk of recent Inbox messages from Microsoft Graph."""
+    """Fetch a bounded page-walk of Inbox messages from Microsoft Graph."""
     messages: list[dict[str, Any]] = []
     remaining = scan_limit
     page_size = min(50, remaining)
+    order_by = "receivedDateTime asc" if scan_order == "oldest" else "receivedDateTime desc"
     payload = await _graph_get(
         access_token,
         "/me/mailFolders/inbox/messages",
         params={
             "$top": str(page_size),
-            "$orderby": "receivedDateTime desc",
+            "$orderby": order_by,
             "$select": (
                 "id,receivedDateTime,subject,from,sender,parentFolderId," "bodyPreview,categories"
             ),
@@ -4386,6 +4387,11 @@ async def automove_inbox_messages(
         le=1.0,
         description="Minimum classifier confidence required for automated moves.",
     ),
+    scan_order: str = Query(
+        default="newest",
+        pattern="^(newest|oldest)$",
+        description="Whether to scan newest-first or oldest-first Inbox messages.",
+    ),
     linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
 ) -> dict[str, Any]:
     """Classify recent inbox messages and move only automation-safe matches.
@@ -4404,6 +4410,7 @@ async def automove_inbox_messages(
         scan_limit=limit,
         move_limit=move_limit,
         min_confidence=min_confidence,
+        scan_order=scan_order,
     )
 
 
@@ -4413,6 +4420,7 @@ async def _automove_for_account(
     scan_limit: int,
     move_limit: int,
     min_confidence: float,
+    scan_order: str = "newest",
 ) -> dict[str, Any]:
     health = _automation_health_for_account(target)
     if not health["automation_ready"]:
@@ -4459,7 +4467,11 @@ async def _automove_for_account(
                 "error": _category_apply_error(exc),
             }
 
-    messages = await _list_inbox_messages_paginated(access_token, scan_limit=scan_limit)
+    messages = await _list_inbox_messages_paginated(
+        access_token,
+        scan_limit=scan_limit,
+        scan_order=scan_order,
+    )
     provider_cfg = classifier_module.AzureAIProviderConfig.from_env()
 
     results: list[dict[str, Any]] = []
@@ -4711,6 +4723,7 @@ async def _automove_for_account(
         },
         "limit": scan_limit,
         "scan_limit": scan_limit,
+        "scan_order": scan_order,
         "move_limit": move_limit,
         "min_confidence": min_confidence,
         "fetched": len(messages),
@@ -4757,6 +4770,10 @@ async def run_scheduled_automation(
         ge=0.90,
         le=1.0,
     ),
+    scan_order: str = Query(
+        default="newest",
+        pattern="^(newest|oldest)$",
+    ),
 ) -> dict[str, Any]:
     """Machine endpoint called by the scheduled workflow.
 
@@ -4789,6 +4806,7 @@ async def run_scheduled_automation(
                 scan_limit=limit,
                 move_limit=move_limit,
                 min_confidence=min_confidence,
+                scan_order=scan_order,
             )
             result["status"] = "completed"
             result["automation_health"] = health
@@ -4811,6 +4829,7 @@ async def run_scheduled_automation(
         "automation": True,
         "scheduled": True,
         "generated_at": _utcnow().isoformat(),
+        "scan_order": scan_order,
         "accounts_seen": len(accounts),
         "accounts_completed": sum(1 for r in account_results if r["status"] == "completed"),
         "accounts_skipped": sum(1 for r in account_results if r["status"] == "skipped"),
