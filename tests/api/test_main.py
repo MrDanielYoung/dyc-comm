@@ -1229,17 +1229,21 @@ def test_ensure_default_mail_folders_creates_missing_only(monkeypatch):
     assert result == [
         {"id": "review-id", "displayName": "Review"},
         {"id": "news-id", "displayName": "News"},
-        {"id": "linkedin-id", "displayName": "LinkedIn"},
+        {"id": "created-id", "displayName": "30 - Money"},
         {"id": "created-id", "displayName": "40 - Notifications"},
         {"id": "created-id", "displayName": "50 - Marketing"},
+        {"id": "linkedin-id", "displayName": "LinkedIn"},
+        {"id": "created-id", "displayName": "56 - Pipedrive"},
         {"id": "created-id", "displayName": "60 - Notes"},
         {"id": "created-id", "displayName": "70 - Contracts"},
         {"id": "created-id", "displayName": "80 - Travel"},
         {"id": "created-id", "displayName": "90 - IT Reports"},
     ]
     assert created_payloads == [
+        {"displayName": "30 - Money"},
         {"displayName": "40 - Notifications"},
         {"displayName": "50 - Marketing"},
+        {"displayName": "56 - Pipedrive"},
         {"displayName": "60 - Notes"},
         {"displayName": "70 - Contracts"},
         {"displayName": "80 - Travel"},
