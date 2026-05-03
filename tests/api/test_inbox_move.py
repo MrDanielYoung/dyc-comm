@@ -1099,3 +1099,54 @@ def test_scheduled_automation_accepts_oldest_backlog_scan(monkeypatch):
     payload = response.json()
     assert payload["scan_order"] == "oldest"
     assert payload["moved"] == 7
+
+
+def test_scheduled_automation_can_filter_to_one_account(monkeypatch):
+    monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "expected-token")
+    accounts = [
+        _account_row("daniel@danielyoung.io"),
+        _account_row("daniel.young@digitalhealthworks.com"),
+    ]
+    monkeypatch.setattr(main, "_list_automation_accounts", lambda: accounts)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+    seen_accounts: list[str] = []
+
+    async def fake_automove(
+        requested_by_email,
+        target,
+        scan_limit,
+        move_limit,
+        min_confidence,
+        scan_order="newest",
+    ):
+        seen_accounts.append(target["email"])
+        return {
+            "account": {"email": target["email"]},
+            "moved": 1,
+            "skipped": 0,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(main, "_automove_for_account", fake_automove)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/automation/run",
+        params={"account": "daniel.young@digitalhealthworks.com"},
+        headers={"Authorization": "Bearer expected-token"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["account_filter"] == "daniel.young@digitalhealthworks.com"
+    assert payload["accounts_seen"] == 1
+    assert seen_accounts == ["daniel.young@digitalhealthworks.com"]

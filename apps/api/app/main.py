@@ -4755,6 +4755,7 @@ def _require_automation_run_token(request: Request) -> None:
 @app.post("/automation/run")
 async def run_scheduled_automation(
     request: Request,
+    account: str | None = Query(default=None),
     limit: int = Query(
         default=INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT,
         ge=1,
@@ -4783,6 +4784,16 @@ async def run_scheduled_automation(
     """
     _require_automation_run_token(request)
     accounts = _list_automation_accounts()
+    account_filter = (account or "").strip().lower()
+    if account_filter:
+        accounts = [
+            row for row in accounts if str(row.get("email") or "").lower() == account_filter
+        ]
+        if not accounts:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Automation account not found: {account_filter}",
+            )
 
     account_results: list[dict[str, Any]] = []
     for account_row in accounts:
@@ -4829,6 +4840,7 @@ async def run_scheduled_automation(
         "automation": True,
         "scheduled": True,
         "generated_at": _utcnow().isoformat(),
+        "account_filter": account_filter or None,
         "scan_order": scan_order,
         "accounts_seen": len(accounts),
         "accounts_completed": sum(1 for r in account_results if r["status"] == "completed"),

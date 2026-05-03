@@ -19,6 +19,10 @@ on:
         options:
           - newest
           - oldest
+      account:
+        description: "Optional single mailbox email to run"
+        required: false
+        default: ""
   schedule:
     - cron: "*/6 * * * *"
 
@@ -41,6 +45,7 @@ jobs:
           RUN_LIMIT: ${{ github.event.inputs.limit || '100' }}
           MOVE_LIMIT: ${{ github.event.inputs.move_limit || '50' }}
           SCAN_ORDER: ${{ github.event.inputs.scan_order || 'newest' }}
+          ACCOUNT: ${{ github.event.inputs.account || '' }}
         run: |
           set -euo pipefail
           if [ -z "${AUTOMATION_RUN_TOKEN:-}" ]; then
@@ -64,6 +69,10 @@ jobs:
             --max-time 540 \
             -X POST \
             -H "Authorization: Bearer ${AUTOMATION_RUN_TOKEN}" \
-            "https://api.comm.danielyoung.io/automation/run?limit=${RUN_LIMIT}&move_limit=${MOVE_LIMIT}&scan_order=${SCAN_ORDER}")"
+            -G "https://api.comm.danielyoung.io/automation/run" \
+            --data-urlencode "limit=${RUN_LIMIT}" \
+            --data-urlencode "move_limit=${MOVE_LIMIT}" \
+            --data-urlencode "scan_order=${SCAN_ORDER}" \
+            --data-urlencode "account=${ACCOUNT}")"
 
           echo "${response}"
