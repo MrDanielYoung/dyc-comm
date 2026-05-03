@@ -43,9 +43,11 @@ SYSTEM_FOLDER_NAMES = (
 DEFAULT_MVP_FOLDER_SPECS = (
     {"name": "10 - Review", "aliases": ("Review",)},
     {"name": "20 - News", "aliases": ("News",)},
-    {"name": "30 - LinkedIn", "aliases": ("LinkedIn",)},
+    {"name": "30 - Money", "aliases": ("Money",)},
     {"name": "40 - Notifications", "aliases": ("Notifications",)},
     {"name": "50 - Marketing", "aliases": ("Marketing",)},
+    {"name": "54 - LinkedIn", "aliases": ("LinkedIn", "30 - LinkedIn")},
+    {"name": "56 - Pipedrive", "aliases": ("Pipedrive",)},
     {"name": "60 - Notes", "aliases": ("Notes",)},
     {"name": "70 - Contracts", "aliases": ("Contracts",)},
     {"name": "80 - Travel", "aliases": ("Travel",)},
@@ -2906,6 +2908,12 @@ def _deterministic_rule_for_message(
     ):
         return "it_reports", 0.95, "perplexity task/repository notification"
 
+    if "linkedin.com" in sender_l:
+        return "social_media", 0.99, "linkedin notification"
+
+    if "pipedrive.com" in sender_l:
+        return "sales_crm", 0.99, "pipedrive crm notification"
+
     # DMARC and email-authentication reports (aggregate, failure, forensic).
     # Matches both Microsoft format ("DMARC report") and Google/RFC-7489
     # format ("Report domain: X Submitter: Y Report-ID: Z").
@@ -3492,6 +3500,8 @@ AUTOMATION_ALLOWED_CATEGORIES = {
     "notifications_system",
     "finance_money",
     "service_updates",
+    "social_media",
+    "sales_crm",
 }
 
 
@@ -4147,9 +4157,11 @@ def _folder_attention_categories(destination_folder_name: str | None) -> list[st
     folder = (destination_folder_name or "").strip()
     if folder == classifier_module.REVIEW_FOLDER:
         return ["< Review >"]
-    if folder in {"20 - News", "30 - LinkedIn", "50 - Marketing"}:
+    if folder in {"20 - News", "50 - Marketing", "54 - LinkedIn"}:
         return ["< Read Later >"]
-    if folder in {"40 - Notifications", "90 - IT Reports"}:
+    if folder == "30 - Money":
+        return ["< Money >"]
+    if folder in {"40 - Notifications", "56 - Pipedrive", "90 - IT Reports"}:
         return ["< FYI >"]
     if folder == "70 - Contracts":
         return ["< Legal >"]

@@ -47,6 +47,8 @@ ALLOWED_CATEGORIES: tuple[str, ...] = (
     "newsletters_news",
     "marketing_promotions",
     "notifications_system",
+    "social_media",
+    "sales_crm",
     "legal_contracts",
     "unknown_ambiguous",
 )
@@ -593,6 +595,8 @@ _CATEGORY_FOLDER_MAP: dict[str, str] = {
     "notifications_system": "40 - Notifications",
     "service_updates": "40 - Notifications",
     "marketing_promotions": "50 - Marketing",
+    "social_media": "54 - LinkedIn",
+    "sales_crm": "56 - Pipedrive",
     "legal_contracts": "70 - Contracts",
     "it_reports": "90 - IT Reports",
 }
