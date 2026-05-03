@@ -10,7 +10,7 @@ on:
       move_limit:
         description: "Maximum messages to move per account"
         required: false
-        default: "50"
+        default: "500"
       scan_order:
         description: "Which side of the inbox to scan"
         required: false
@@ -43,7 +43,7 @@ jobs:
         env:
           AUTOMATION_RUN_TOKEN: ${{ secrets.AUTOMATION_RUN_TOKEN }}
           RUN_LIMIT: ${{ github.event.inputs.limit || '100' }}
-          MOVE_LIMIT: ${{ github.event.inputs.move_limit || '50' }}
+          MOVE_LIMIT: ${{ github.event.inputs.move_limit || '500' }}
           SCAN_ORDER: ${{ github.event.inputs.scan_order || 'newest' }}
           ACCOUNT: ${{ github.event.inputs.account || '' }}
         run: |
@@ -56,8 +56,8 @@ jobs:
             echo "::error::limit must be an integer from 1 to 500."
             exit 1
           fi
-          if ! [[ "${MOVE_LIMIT}" =~ ^[0-9]+$ ]] || [ "${MOVE_LIMIT}" -lt 1 ] || [ "${MOVE_LIMIT}" -gt 100 ]; then
-            echo "::error::move_limit must be an integer from 1 to 100."
+          if ! [[ "${MOVE_LIMIT}" =~ ^[0-9]+$ ]] || [ "${MOVE_LIMIT}" -lt 1 ] || [ "${MOVE_LIMIT}" -gt 500 ]; then
+            echo "::error::move_limit must be an integer from 1 to 500."
             exit 1
           fi
           if [ "${SCAN_ORDER}" != "newest" ] && [ "${SCAN_ORDER}" != "oldest" ]; then
