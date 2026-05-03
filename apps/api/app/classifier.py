@@ -589,7 +589,9 @@ async def classify_with_provider(
 # listed here intentionally fall back to 10 - Review.
 _CATEGORY_FOLDER_MAP: dict[str, str] = {
     "newsletters_news": "20 - News",
+    "finance_money": "30 - Money",
     "notifications_system": "40 - Notifications",
+    "service_updates": "40 - Notifications",
     "marketing_promotions": "50 - Marketing",
     "legal_contracts": "70 - Contracts",
     "it_reports": "90 - IT Reports",

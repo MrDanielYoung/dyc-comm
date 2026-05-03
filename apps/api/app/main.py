@@ -3011,7 +3011,7 @@ def _deterministic_rule_for_message(
             "lastschrift",
         )
     ):
-        return "money", 0.88, "billing/payment/invoice notification"
+        return "finance_money", 0.97, "billing/payment/invoice notification"
 
     # Marketing newsletters and promotional emails (EN + DE).
     if any(
@@ -3028,7 +3028,7 @@ def _deterministic_rule_for_message(
             "im browser anzeigen",
         )
     ):
-        return "marketing", 0.82, "promotional/marketing email"
+        return "marketing_promotions", 0.95, "promotional/marketing email"
 
     # News digests and newsletters.
     if any(
@@ -3045,7 +3045,7 @@ def _deterministic_rule_for_message(
             "online first:",
         )
     ):
-        return "notifications_system", 0.82, "news digest or newsletter"
+        return "newsletters_news", 0.95, "news digest or newsletter"
 
     if any(
         token in sender_l
@@ -3490,6 +3490,8 @@ AUTOMATION_ALLOWED_CATEGORIES = {
     "newsletters_news",
     "marketing_promotions",
     "notifications_system",
+    "finance_money",
+    "service_updates",
 }
 
 
