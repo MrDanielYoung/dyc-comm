@@ -26,6 +26,8 @@ These tests pin the safety contract for ``POST /mail/inbox/move``:
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from apps.api.app import classifier as classifier_module
@@ -583,7 +585,8 @@ def test_automove_moves_only_high_confidence_allowed_category(monkeypatch):
         },
     )
 
-    async def fake_list_messages(token, scan_limit):
+    async def fake_list_messages(token, scan_limit, scan_order="newest"):
+        assert scan_order == "newest"
         return [
             {
                 "id": "msg-1",
@@ -693,8 +696,9 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
         },
     )
 
-    async def fake_list_messages(token, scan_limit):
+    async def fake_list_messages(token, scan_limit, scan_order="newest"):
         assert scan_limit == 3
+        assert scan_order == "newest"
         return [
             {
                 "id": "msg-review",
@@ -801,6 +805,67 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
     assert payload["results"][2]["error"] == "automation_move_limit_reached"
 
 
+def test_automove_can_scan_oldest_first(monkeypatch):
+    _install_account_session(monkeypatch)
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+
+    async def fake_list_messages(token, scan_limit, scan_order="newest"):
+        assert scan_limit == 500
+        assert scan_order == "oldest"
+        return []
+
+    monkeypatch.setattr(main, "_list_inbox_messages_paginated", fake_list_messages)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/mail/inbox/automove",
+        params={
+            "account": "daniel@danielyoung.io",
+            "limit": 500,
+            "move_limit": 100,
+            "scan_order": "oldest",
+        },
+        cookies={main.EMAIL_COOKIE: "daniel@danielyoung.io"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scan_limit"] == 500
+    assert payload["scan_order"] == "oldest"
+    assert payload["move_limit"] == 100
+
+
+def test_paginated_inbox_fetch_supports_oldest_order(monkeypatch):
+    calls: list[dict] = []
+
+    async def fake_graph_get(token, path, params=None):
+        calls.append(params or {})
+        return {"value": []}
+
+    monkeypatch.setattr(main, "_graph_get", fake_graph_get)
+
+    result = asyncio.run(
+        main._list_inbox_messages_paginated(
+            "graph-token",
+            scan_limit=500,
+            scan_order="oldest",
+        )
+    )
+
+    assert result == []
+    assert calls[0]["$top"] == "50"
+    assert calls[0]["$orderby"] == "receivedDateTime asc"
+
+
 def test_automove_skips_forced_review_without_graph_call(monkeypatch):
     _install_account_session(monkeypatch)
     monkeypatch.setattr(
@@ -814,7 +879,8 @@ def test_automove_skips_forced_review_without_graph_call(monkeypatch):
         },
     )
 
-    async def fake_list_messages(token, scan_limit):
+    async def fake_list_messages(token, scan_limit, scan_order="newest"):
+        assert scan_order == "newest"
         return [
             {
                 "id": "msg-1",
@@ -947,11 +1013,19 @@ def test_scheduled_automation_runs_yellow_and_skips_red(monkeypatch):
 
     monkeypatch.setattr(main, "_automation_health_for_account", fake_health)
 
-    async def fake_automove(requested_by_email, target, scan_limit, move_limit, min_confidence):
+    async def fake_automove(
+        requested_by_email,
+        target,
+        scan_limit,
+        move_limit,
+        min_confidence,
+        scan_order="newest",
+    ):
         assert requested_by_email == "automation@scheduler"
         assert target["email"] == "yellow@example.com"
         assert scan_limit == main.INBOX_AUTOMATION_DEFAULT_SCAN_LIMIT
         assert move_limit == main.INBOX_AUTOMATION_DEFAULT_MOVE_LIMIT
+        assert scan_order == "newest"
         return {
             "account": {"email": target["email"]},
             "moved": 2,
@@ -974,3 +1048,54 @@ def test_scheduled_automation_runs_yellow_and_skips_red(monkeypatch):
     assert payload["accounts_completed"] == 1
     assert payload["accounts_skipped"] == 1
     assert payload["moved"] == 2
+
+
+def test_scheduled_automation_accepts_oldest_backlog_scan(monkeypatch):
+    monkeypatch.setenv("AUTOMATION_RUN_TOKEN", "expected-token")
+    monkeypatch.setattr(
+        main,
+        "_list_automation_accounts",
+        lambda: [_account_row("dyc@example.com")],
+    )
+    monkeypatch.setattr(
+        main,
+        "_automation_health_for_account",
+        lambda row: {
+            "state": "green",
+            "label": "Automation ready",
+            "automation_ready": True,
+            "reasons": [],
+        },
+    )
+
+    async def fake_automove(
+        requested_by_email,
+        target,
+        scan_limit,
+        move_limit,
+        min_confidence,
+        scan_order="newest",
+    ):
+        assert scan_limit == 500
+        assert move_limit == 100
+        assert scan_order == "oldest"
+        return {
+            "account": {"email": target["email"]},
+            "moved": 7,
+            "skipped": 3,
+            "failed": 0,
+        }
+
+    monkeypatch.setattr(main, "_automove_for_account", fake_automove)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/automation/run",
+        params={"limit": 500, "move_limit": 100, "scan_order": "oldest"},
+        headers={"Authorization": "Bearer expected-token"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scan_order"] == "oldest"
+    assert payload["moved"] == 7
