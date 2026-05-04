@@ -96,6 +96,11 @@ _URGENT_PHRASES: tuple[str, ...] = (
     "second request",
     "final notice",
     "last chance",
+    "past due",
+    "overdue",
+    "payment overdue",
+    "zahlungserinnerung",
+    "fällig",
 )
 
 _INVOICE_PHRASES: tuple[str, ...] = (
@@ -110,6 +115,36 @@ _INVOICE_PHRASES: tuple[str, ...] = (
     "bill for services",
     "statement of account",
     "due on receipt",
+    "past due",
+    "overdue",
+    "payment overdue",
+    "payment reminder",
+    "zahlungserinnerung",
+    "mahnung",
+    "mahnbescheid",
+    "minimum payment",
+    "credit card statement",
+    "bank statement",
+    "please pay",
+)
+
+# Subject-level billing signals used in sender-specific routing rules.
+# Deliberately broad so any billing-type email from a known sender is caught.
+_BILLING_SUBJECT_PHRASES: tuple[str, ...] = (
+    "receipt",
+    "invoice",
+    "rechnung",
+    "zahlungserinnerung",
+    "payment",
+    "billing",
+    "statement",
+    "past due",
+    "overdue",
+    "subscription",
+    "charge",
+    "purchase",
+    "order confirmation",
+    "bestellung",
 )
 
 _DB_BOOTSTRAPPED = False
@@ -2991,6 +3026,43 @@ def _deterministic_rule_for_message(
     ):
         return "it_reports", 0.85, "repository/build notification"
 
+    # Sender-specific routing: known SaaS / service providers where the
+    # sending domain tells us more than the content alone.  Billing signals
+    # in the subject override the default bucket for each sender.
+    sender_domain = sender_l.split("@")[-1] if "@" in sender_l else sender_l
+
+    if "anthropic.com" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.98, "anthropic billing"
+        return "notifications_system", 0.85, "anthropic notification"
+
+    if "usemotion.com" in sender_domain or "motion.ai" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.98, "motion billing"
+        return "service_updates", 0.82, "motion notification"
+
+    if "travelingmailbox.com" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.97, "traveling mailbox billing"
+        return "notifications_system", 0.85, "traveling mailbox notification"
+
+    if "surfe.com" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.97, "surfe billing"
+        return "it_reports", 0.85, "surfe account activity"
+
+    if "cookieinformation.com" in sender_domain or "cookiebot.com" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.97, "cookiebot billing"
+        return "it_reports", 0.88, "cookiebot notification"
+
+    # Microsoft: covers microsoft.com, microsoftonline.com, and all
+    # *.microsoft.com subdomains used for billing and service emails.
+    if "microsoft" in sender_domain:
+        if any(p in subject_l for p in _BILLING_SUBJECT_PHRASES):
+            return "finance_money", 0.97, "microsoft billing"
+        return "it_reports", 0.88, "microsoft notification"
+
     # Billing, invoices, and payment receipts. Broad match on common
     # transactional subjects across all three inboxes (EN + DE).
     if any(
@@ -3008,7 +3080,9 @@ def _deterministic_rule_for_message(
             "statement is now available",
             "monatsabrechnung",
             "ihre rechnung",
+            "rechnung",
             "zahlungsbestätigung",
+            "zahlungserinnerung",
             "received payment",
             "received $",
             "received €",
@@ -3018,6 +3092,16 @@ def _deterministic_rule_for_message(
             "will debit your account",
             "direct debit",
             "lastschrift",
+            "thank you for your payment",
+            "past due",
+            "payment overdue",
+            "bank statement",
+            "credit card statement",
+            "kontoauszug",
+            "kreditkartenauszug",
+            "kreditkartenabrechnung",
+            "new transaction",
+            "transaction alert",
         )
     ):
         return "finance_money", 0.97, "billing/payment/invoice notification"
@@ -3055,6 +3139,22 @@ def _deterministic_rule_for_message(
         )
     ):
         return "newsletters_news", 0.95, "news digest or newsletter"
+
+    # Job application receipts and hiring notifications.
+    if any(
+        phrase in combined
+        for phrase in (
+            "application received",
+            "thank you for your application",
+            "we received your application",
+            "your job application",
+            "new application for",
+            "bewerbung eingegangen",
+            "bewerbungseingang",
+            "applied for the position",
+        )
+    ):
+        return "notifications_system", 0.85, "job application receipt"
 
     if any(
         token in sender_l
@@ -4139,17 +4239,73 @@ def _desired_attention_categories(
         labels.append("< Read Later >")
     if decision.category in {"it_reports", "notifications_system", "service_updates"}:
         labels.append("< FYI >")
-    if decision.category == "meetings_scheduling" or any(
+    if any(
         word in combined
         for word in ("flight", "hotel", "boarding", "reservation", "travel", "itinerary")
     ):
         labels.append("< Travel >")
+
+    # Meeting invitations and scheduling requests need a prompt reply.
+    if decision.category == "meetings_scheduling" or any(
+        phrase in combined
+        for phrase in (
+            "meeting request",
+            "meeting invitation",
+            "calendar invite",
+            "invited you to a meeting",
+            "you're invited",
+            "join me for a meeting",
+            "i'd like to schedule",
+            "let's meet",
+            "einladung zur besprechung",
+            "besprechungsanfrage",
+        )
+    ):
+        if "< Reply >" not in labels:
+            labels.append("< Reply >")
+
+    # New sales leads from Pipedrive or web forms — act today.
+    if any(
+        phrase in combined
+        for phrase in (
+            "new lead",
+            "new deal",
+            "new contact submitted",
+            "form submission",
+        )
+    ):
+        if "< Customer >" not in labels:
+            labels.append("< Customer >")
+        if "< Today >" not in labels:
+            labels.append("< Today >")
+
+    # Past-due / overdue payments — needs immediate attention.
+    if any(
+        phrase in combined
+        for phrase in (
+            "past due",
+            "overdue",
+            "payment overdue",
+            "zahlungserinnerung",
+            "mahnung",
+            "mahnbescheid",
+            "fällig",
+        )
+    ):
+        if "< Pay This >" not in labels:
+            labels.append("< Pay This >")
+        if "< Today >" not in labels:
+            labels.append("< Today >")
+
     if any(word in combined for word in ("urgent", "today", "due today", "asap")):
-        labels.append("< Today >")
+        if "< Today >" not in labels:
+            labels.append("< Today >")
     elif any(word in combined for word in ("this week", "by friday", "deadline")):
-        labels.append("< This Week >")
+        if "< This Week >" not in labels:
+            labels.append("< This Week >")
     if any(phrase in combined for phrase in _INVOICE_PHRASES):
-        labels.append("< Pay This >")
+        if "< Pay This >" not in labels:
+            labels.append("< Pay This >")
 
     return list(dict.fromkeys(labels))
 
@@ -4511,6 +4667,21 @@ async def _automove_for_account(
         dry_run_row = _load_dry_run_row(account_id, provider_message_id)
         skip_reason = _automation_safety_skip_reason(decision, min_confidence)
         if skip_reason:
+            # Apply attention labels even when not moving so the user sees
+            # < Pay This >, < Reply >, < Customer >, < Today > etc. in their
+            # inbox without needing to open each email.
+            if _outlook_category_labels_enabled() and not label_bootstrap_error:
+                in_inbox_cats = _desired_attention_categories(decision, message, moved=False)
+                if in_inbox_cats:
+                    try:
+                        await _apply_message_categories(
+                            access_token,
+                            provider_message_id,
+                            _message_categories(message),
+                            in_inbox_cats,
+                        )
+                    except Exception:
+                        pass  # label errors never block the skip flow
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,

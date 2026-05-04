@@ -798,6 +798,11 @@ def test_automove_scans_deeper_than_move_limit(monkeypatch):
     assert category_calls == [
         (
             "graph-token",
+            "/me/messages/msg-review",
+            {"categories": ["< Review >", "< Legal >"]},
+        ),
+        (
+            "graph-token",
             "/me/messages/msg-move-1",
             {"categories": ["< FYI >"]},
         ),
