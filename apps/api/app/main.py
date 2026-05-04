@@ -187,6 +187,7 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     ("MOTION_API_KEY", True),
     ("MOTION_WORKSPACE_ID", False),
     ("MOTION_ASSIGNEE_ID", False),
+    ("MOTION_PROJECT_ID", False),
     ("MOTION_TASKS_ENABLED", False),
 )
 
@@ -212,6 +213,7 @@ _OPTIONAL_RUNTIME_VARIABLES: frozenset[str] = frozenset(
         "MOTION_API_KEY",
         "MOTION_WORKSPACE_ID",
         "MOTION_ASSIGNEE_ID",
+        "MOTION_PROJECT_ID",
         "MOTION_TASKS_ENABLED",
     }
 )
@@ -4428,6 +4430,16 @@ def _motion_tasks_enabled() -> bool:
 # during automation runs when the env vars are not set.
 _MOTION_WORKSPACE_ID_CACHE: str | None = None
 _MOTION_ASSIGNEE_ID_CACHE: str | None = None
+_MOTION_PROJECT_ID_CACHE: str | None = None
+
+_MOTION_REASON_LABELS: dict[str, str] = {
+    "payment_attention": "Pay This",
+    "customer_today": "New Lead",
+    "meeting_reply": "Meeting",
+    "reply_needed": "Reply Needed",
+    "urgent_email": "Urgent",
+    "today_action": "Today",
+}
 
 
 def _is_pay_this_message(message: dict[str, Any]) -> bool:
@@ -4718,6 +4730,14 @@ async def _motion_assignee_id() -> str:
     return _MOTION_ASSIGNEE_ID_CACHE
 
 
+async def _motion_project_id() -> str | None:
+    global _MOTION_PROJECT_ID_CACHE
+    configured = os.getenv("MOTION_PROJECT_ID", "").strip()
+    if configured:
+        return configured
+    return _MOTION_PROJECT_ID_CACHE
+
+
 async def _create_motion_task_for_message(
     *,
     account_email: str,
@@ -4729,9 +4749,13 @@ async def _create_motion_task_for_message(
     priority: str,
 ) -> dict[str, Any]:
     subject = str(message.get("subject") or "")
-    payload = {
-        "workspaceId": await _motion_workspace_id(),
-        "assigneeId": await _motion_assignee_id(),
+    workspace_id = await _motion_workspace_id()
+    assignee_id = await _motion_assignee_id()
+    project_id = await _motion_project_id()
+    reason_label = _MOTION_REASON_LABELS.get(reason, reason)
+    payload: dict[str, Any] = {
+        "workspaceId": workspace_id,
+        "assigneeId": assignee_id,
         "name": _motion_task_name(reason, subject),
         "description": _motion_task_description(
             account_email=account_email,
@@ -4743,8 +4767,10 @@ async def _create_motion_task_for_message(
         ),
         "priority": priority,
         "duration": "REMINDER",
-        "labels": ["DYC Comm", "Email", reason],
+        "labels": ["Email", reason_label],
     }
+    if project_id:
+        payload["projectId"] = project_id
     return await _motion_post_json("/v1/tasks", payload)
 
 
@@ -5578,22 +5604,23 @@ async def motion_test_task(
     try:
         workspace_id = await _motion_workspace_id()
         assignee_id = await _motion_assignee_id()
-        task = await _motion_post_json(
-            "/v1/tasks",
-            {
-                "workspaceId": workspace_id,
-                "assigneeId": assignee_id,
-                "name": "DYC Comm connectivity test",
-                "description": (
-                    f"Canary task created by DYC Comm at {generated_at}.\n"
-                    "You can safely delete this task — it confirms the Motion API "
-                    "integration is working correctly."
-                ),
-                "priority": "LOW",
-                "duration": "REMINDER",
-                "labels": ["DYC Comm"],
-            },
-        )
+        project_id = await _motion_project_id()
+        canary_payload: dict[str, Any] = {
+            "workspaceId": workspace_id,
+            "assigneeId": assignee_id,
+            "name": "DYC Comm connectivity test",
+            "description": (
+                f"Canary task created by DYC Comm at {generated_at}.\n"
+                "You can safely delete this task — it confirms the Motion API "
+                "integration is working correctly."
+            ),
+            "priority": "LOW",
+            "duration": "REMINDER",
+            "labels": ["Email"],
+        }
+        if project_id:
+            canary_payload["projectId"] = project_id
+        task = await _motion_post_json("/v1/tasks", canary_payload)
         task_id = str(task.get("id") or "")
         return {
             "ok": True,
@@ -5601,6 +5628,7 @@ async def motion_test_task(
             "task_name": task.get("name"),
             "workspace_id": workspace_id,
             "assignee_id": assignee_id,
+            "project_id": project_id,
             "generated_at": generated_at,
         }
     except Exception as exc:
