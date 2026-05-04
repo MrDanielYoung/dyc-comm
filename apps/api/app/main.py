@@ -5557,6 +5557,60 @@ async def backfill_all_labels(request: Request) -> dict[str, Any]:
     }
 
 
+@app.post("/motion/test-task")
+async def motion_test_task(
+    linked_email: str | None = Cookie(default=None, alias=EMAIL_COOKIE),
+) -> dict[str, Any]:
+    """Create a canary task in Motion to verify the API key and configuration.
+
+    The task is named "DYC Comm connectivity test" and can be safely deleted
+    from Motion after confirming it appeared. Requires a valid session.
+    """
+    _resolve_session_user_email(linked_email)
+
+    if not _motion_tasks_enabled():
+        return {
+            "ok": False,
+            "error": "Motion tasks are not enabled. Set MOTION_TASKS_ENABLED=true and MOTION_API_KEY.",  # noqa: E501
+        }
+
+    generated_at = _utcnow().isoformat()
+    try:
+        workspace_id = await _motion_workspace_id()
+        assignee_id = await _motion_assignee_id()
+        task = await _motion_post_json(
+            "/v1/tasks",
+            {
+                "workspaceId": workspace_id,
+                "assigneeId": assignee_id,
+                "name": "DYC Comm connectivity test",
+                "description": (
+                    f"Canary task created by DYC Comm at {generated_at}.\n"
+                    "You can safely delete this task — it confirms the Motion API "
+                    "integration is working correctly."
+                ),
+                "priority": "LOW",
+                "duration": "REMINDER",
+                "labels": ["DYC Comm"],
+            },
+        )
+        task_id = str(task.get("id") or "")
+        return {
+            "ok": True,
+            "task_id": task_id or None,
+            "task_name": task.get("name"),
+            "workspace_id": workspace_id,
+            "assignee_id": assignee_id,
+            "generated_at": generated_at,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "generated_at": generated_at,
+        }
+
+
 @app.get("/accounts/{email}/dashboard")
 def account_dashboard(
     email: str,
