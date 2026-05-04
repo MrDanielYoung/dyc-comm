@@ -128,6 +128,10 @@ _INVOICE_PHRASES: tuple[str, ...] = (
     "please pay",
 )
 
+_MOTION_HIGH_IMPORTANCE_LABELS: frozenset[str] = frozenset(
+    {"< Pay This >", "< Reply >", "< Customer >", "< Today >"}
+)
+
 # Subject-level billing signals used in sender-specific routing rules.
 # Deliberately broad so any billing-type email from a known sender is caught.
 _BILLING_SUBJECT_PHRASES: tuple[str, ...] = (
@@ -179,6 +183,11 @@ _RUNTIME_VARIABLES: tuple[tuple[str, bool], ...] = (
     ("ACS_CONNECTION_STRING", True),
     ("ACS_FROM_NUMBER", False),
     ("ALERT_PHONE_NUMBER", False),
+    # Motion one-way task creation for highly important emails.
+    ("MOTION_API_KEY", True),
+    ("MOTION_WORKSPACE_ID", False),
+    ("MOTION_ASSIGNEE_ID", False),
+    ("MOTION_TASKS_ENABLED", False),
 )
 
 # Env vars that are optional / advisory. Their absence must NOT cause
@@ -200,6 +209,10 @@ _OPTIONAL_RUNTIME_VARIABLES: frozenset[str] = frozenset(
         "ACS_CONNECTION_STRING",
         "ACS_FROM_NUMBER",
         "ALERT_PHONE_NUMBER",
+        "MOTION_API_KEY",
+        "MOTION_WORKSPACE_ID",
+        "MOTION_ASSIGNEE_ID",
+        "MOTION_TASKS_ENABLED",
     }
 )
 
@@ -979,6 +992,32 @@ def _ensure_account_tables() -> None:
                 """
                 ALTER TABLE mailbox_move_action
                 ADD COLUMN IF NOT EXISTS sms_notified_at TIMESTAMPTZ
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS motion_task_sync (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL REFERENCES connected_account(id)
+                        ON DELETE CASCADE,
+                    account_email TEXT NOT NULL,
+                    provider_message_id TEXT NOT NULL,
+                    motion_task_id TEXT,
+                    motion_task_name TEXT,
+                    motion_priority TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    reason TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE(account_id, provider_message_id)
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_motion_task_sync_account_status
+                ON motion_task_sync(account_id, status)
                 """
             )
             cursor.execute(
@@ -4106,12 +4145,17 @@ async def move_inbox_messages(
 
         applied_categories: list[str] = []
         label_error: str | None = None
-        if _outlook_category_labels_enabled():
+        motion_task = {"enabled": _motion_tasks_enabled(), "created": False}
+        if _outlook_category_labels_enabled() or _motion_tasks_enabled():
             try:
                 fetched = await _graph_get(
                     access_token,
                     f"/me/messages/{provider_message_id}",
-                    params={"$select": "id,categories,subject,bodyPreview"},
+                    params={
+                        "$select": (
+                            "id,categories,subject,bodyPreview,from,sender,receivedDateTime"
+                        )
+                    },
                 )
                 reconstructed_decision = classifier_module.ClassificationDecision(
                     category=dry_run_row.get("category") or "unknown_ambiguous",
@@ -4125,11 +4169,20 @@ async def move_inbox_messages(
                 desired_categories = _desired_attention_categories(
                     reconstructed_decision, fetched, moved=True
                 )
-                applied_categories = await _apply_message_categories(
-                    access_token,
-                    provider_message_id,
-                    _message_categories(fetched),
-                    desired_categories,
+                if _outlook_category_labels_enabled():
+                    applied_categories = await _apply_message_categories(
+                        access_token,
+                        provider_message_id,
+                        _message_categories(fetched),
+                        desired_categories,
+                    )
+                motion_task = await _maybe_create_motion_task(
+                    account_id=account_id,
+                    account_email=account_email,
+                    provider_message_id=provider_message_id,
+                    decision=reconstructed_decision,
+                    message=fetched,
+                    categories=applied_categories or desired_categories,
                 )
             except Exception as exc:
                 label_error = _category_apply_error(exc)
@@ -4159,6 +4212,7 @@ async def move_inbox_messages(
                 "forced_review": forced,
                 "categories_applied": applied_categories,
                 "category_error": label_error,
+                "motion_task": motion_task,
             }
         )
 
@@ -4365,6 +4419,10 @@ def _sms_alerts_enabled() -> bool:
     )
 
 
+def _motion_tasks_enabled() -> bool:
+    return _bool_env("MOTION_TASKS_ENABLED") and bool(os.getenv("MOTION_API_KEY"))
+
+
 def _is_pay_this_message(message: dict[str, Any]) -> bool:
     subject = str(message.get("subject") or "").lower()
     body = str(message.get("bodyPreview") or "").lower()
@@ -4404,6 +4462,341 @@ def _sms_already_sent(account_id: str, provider_message_id: str) -> bool:
                 return cursor.fetchone() is not None
     except psycopg.Error:
         return False
+
+
+def _motion_task_already_created(account_id: str, provider_message_id: str) -> bool:
+    if not _database_url():
+        return False
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT 1
+                    FROM motion_task_sync
+                    WHERE account_id = %s
+                      AND provider_message_id = %s
+                      AND status = 'succeeded'
+                    LIMIT 1
+                    """,
+                    (account_id, provider_message_id),
+                )
+                return cursor.fetchone() is not None
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to check Motion task sync state.",
+        ) from exc
+
+
+def _record_motion_task_sync(
+    *,
+    account_id: str,
+    account_email: str,
+    provider_message_id: str,
+    status: str,
+    reason: str,
+    motion_task_id: str | None = None,
+    motion_task_name: str | None = None,
+    motion_priority: str | None = None,
+    error: str | None = None,
+) -> None:
+    if not _database_url():
+        return
+
+    _ensure_account_tables()
+    psycopg = _psycopg()
+    try:
+        with _get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO motion_task_sync (
+                        id,
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        motion_task_id,
+                        motion_task_name,
+                        motion_priority,
+                        status,
+                        error,
+                        reason
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (account_id, provider_message_id) DO UPDATE
+                    SET motion_task_id = EXCLUDED.motion_task_id,
+                        motion_task_name = EXCLUDED.motion_task_name,
+                        motion_priority = EXCLUDED.motion_priority,
+                        status = EXCLUDED.status,
+                        error = EXCLUDED.error,
+                        reason = EXCLUDED.reason,
+                        updated_at = now()
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        account_id,
+                        account_email,
+                        provider_message_id,
+                        motion_task_id,
+                        motion_task_name,
+                        motion_priority,
+                        status,
+                        error,
+                        reason,
+                    ),
+                )
+            connection.commit()
+    except psycopg.Error as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to persist Motion task sync state.",
+        ) from exc
+
+
+def _motion_task_reason_and_priority(
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+    categories: list[str],
+) -> tuple[str, str] | None:
+    subject = str(message.get("subject") or "").lower()
+    body = str(message.get("bodyPreview") or "").lower()
+    combined = f"{subject}\n{body}"
+    important_labels = _MOTION_HIGH_IMPORTANCE_LABELS.intersection(categories)
+
+    if "< Pay This >" in important_labels or any(
+        phrase in combined
+        for phrase in (
+            "past due",
+            "overdue",
+            "payment overdue",
+            "zahlungserinnerung",
+            "mahnung",
+            "mahnbescheid",
+            "fällig",
+        )
+    ):
+        return "payment_attention", "ASAP"
+    if "< Customer >" in important_labels and "< Today >" in important_labels:
+        return "customer_today", "HIGH"
+    if "< Reply >" in important_labels:
+        if decision.category == "meetings_scheduling":
+            return "meeting_reply", "HIGH"
+        return "reply_needed", "HIGH"
+    if _is_sms_urgent(decision, message):
+        return "urgent_email", "ASAP"
+    return None
+
+
+def _motion_task_name(reason: str, subject: str) -> str:
+    clean_subject = " ".join((subject or "Email needs attention").split())
+    prefix = {
+        "payment_attention": "Pay/clear email",
+        "customer_today": "Follow up on customer email",
+        "meeting_reply": "Respond to meeting email",
+        "reply_needed": "Reply to email",
+        "urgent_email": "Handle urgent email",
+    }.get(reason, "Handle important email")
+    name = f"{prefix}: {clean_subject}"
+    return name[:250]
+
+
+def _motion_task_description(
+    *,
+    account_email: str,
+    provider_message_id: str,
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+    categories: list[str],
+    reason: str,
+) -> str:
+    sender = _sender_email_from_graph(message) or "unknown sender"
+    subject = str(message.get("subject") or "(no subject)")
+    received_at = str(message.get("receivedDateTime") or "unknown")
+    body_preview = str(message.get("bodyPreview") or "").strip()
+    labels = ", ".join(categories) if categories else "none"
+    preview = body_preview[:1000] if body_preview else "(no preview)"
+    return "\n".join(
+        [
+            "One-way safety task created by DYC Comm.",
+            "",
+            "**What to do:** clear this in Motion after you have handled the email.",
+            "Completing this task in Motion does not change, move, archive, or reply to the email.",
+            "",
+            f"- Importance reason: `{reason}`",
+            f"- Mailbox: `{account_email}`",
+            f"- From: `{sender}`",
+            f"- Subject: `{subject}`",
+            f"- Received: `{received_at}`",
+            f"- Recommended folder: `{decision.recommended_folder}`",
+            f"- Classifier category: `{decision.category}`",
+            f"- Confidence: `{decision.confidence:.2f}`",
+            f"- Outlook labels: {labels}",
+            f"- Provider message id: `{provider_message_id}`",
+            "",
+            "Body preview:",
+            "",
+            preview,
+        ]
+    )
+
+
+async def _motion_get_json(path: str) -> dict[str, Any]:
+    api_key = os.getenv("MOTION_API_KEY")
+    if not api_key:
+        raise RuntimeError("MOTION_API_KEY is not configured.")
+    base_url = os.getenv("MOTION_API_BASE_URL", "https://api.usemotion.com").rstrip("/")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            f"{base_url}{path}",
+            headers={"X-API-Key": api_key},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def _motion_post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.getenv("MOTION_API_KEY")
+    if not api_key:
+        raise RuntimeError("MOTION_API_KEY is not configured.")
+    base_url = os.getenv("MOTION_API_BASE_URL", "https://api.usemotion.com").rstrip("/")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.post(
+            f"{base_url}{path}",
+            headers={"X-API-Key": api_key},
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+async def _motion_workspace_id() -> str:
+    configured = os.getenv("MOTION_WORKSPACE_ID", "").strip()
+    if configured:
+        return configured
+    payload = await _motion_get_json("/v1/workspaces")
+    workspaces = payload.get("workspaces") or payload.get("value") or []
+    if not isinstance(workspaces, list) or not workspaces:
+        raise RuntimeError("Motion workspace lookup returned no workspaces.")
+    workspace = workspaces[0]
+    workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
+    if not workspace_id:
+        raise RuntimeError("Motion workspace lookup did not include an id.")
+    return str(workspace_id)
+
+
+async def _motion_assignee_id() -> str:
+    configured = os.getenv("MOTION_ASSIGNEE_ID", "").strip()
+    if configured:
+        return configured
+    payload = await _motion_get_json("/v1/users/me")
+    user_id = payload.get("id") or (payload.get("user") or {}).get("id")
+    if not user_id:
+        raise RuntimeError("Motion current-user lookup did not include an id.")
+    return str(user_id)
+
+
+async def _create_motion_task_for_message(
+    *,
+    account_email: str,
+    provider_message_id: str,
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+    categories: list[str],
+    reason: str,
+    priority: str,
+) -> dict[str, Any]:
+    subject = str(message.get("subject") or "")
+    payload = {
+        "workspaceId": await _motion_workspace_id(),
+        "assigneeId": await _motion_assignee_id(),
+        "name": _motion_task_name(reason, subject),
+        "description": _motion_task_description(
+            account_email=account_email,
+            provider_message_id=provider_message_id,
+            decision=decision,
+            message=message,
+            categories=categories,
+            reason=reason,
+        ),
+        "priority": priority,
+        "duration": "REMINDER",
+        "labels": ["DYC Comm", "Email", reason],
+    }
+    return await _motion_post_json("/v1/tasks", payload)
+
+
+async def _maybe_create_motion_task(
+    *,
+    account_id: str,
+    account_email: str,
+    provider_message_id: str,
+    decision: classifier_module.ClassificationDecision,
+    message: dict[str, Any],
+    categories: list[str],
+) -> dict[str, Any]:
+    if not _motion_tasks_enabled():
+        return {"enabled": False, "created": False}
+
+    signal = _motion_task_reason_and_priority(decision, message, categories)
+    if not signal:
+        return {"enabled": True, "created": False, "reason": "not_high_importance"}
+
+    reason, priority = signal
+    if _motion_task_already_created(account_id, provider_message_id):
+        return {"enabled": True, "created": False, "reason": "already_created"}
+
+    try:
+        task = await _create_motion_task_for_message(
+            account_email=account_email,
+            provider_message_id=provider_message_id,
+            decision=decision,
+            message=message,
+            categories=categories,
+            reason=reason,
+            priority=priority,
+        )
+        task_id = str(task.get("id") or "")
+        task_name = str(task.get("name") or _motion_task_name(reason, message.get("subject") or ""))
+        _record_motion_task_sync(
+            account_id=account_id,
+            account_email=account_email,
+            provider_message_id=provider_message_id,
+            status="succeeded",
+            reason=reason,
+            motion_task_id=task_id or None,
+            motion_task_name=task_name,
+            motion_priority=priority,
+        )
+        return {
+            "enabled": True,
+            "created": True,
+            "task_id": task_id or None,
+            "priority": priority,
+            "reason": reason,
+        }
+    except Exception as exc:
+        error = _category_apply_error(exc)
+        _record_motion_task_sync(
+            account_id=account_id,
+            account_email=account_email,
+            provider_message_id=provider_message_id,
+            status="failed",
+            reason=reason,
+            motion_priority=priority,
+            error=error,
+        )
+        logger.exception("motion.task.create_failed message_id=%s", provider_message_id)
+        return {
+            "enabled": True,
+            "created": False,
+            "reason": reason,
+            "priority": priority,
+            "error": error,
+        }
 
 
 def _record_sms_sent(account_id: str, provider_message_id: str) -> None:
@@ -4667,11 +5060,11 @@ async def _automove_for_account(
         dry_run_row = _load_dry_run_row(account_id, provider_message_id)
         skip_reason = _automation_safety_skip_reason(decision, min_confidence)
         if skip_reason:
+            in_inbox_cats = _desired_attention_categories(decision, message, moved=False)
             # Apply attention labels even when not moving so the user sees
             # < Pay This >, < Reply >, < Customer >, < Today > etc. in their
             # inbox without needing to open each email.
             if _outlook_category_labels_enabled() and not label_bootstrap_error:
-                in_inbox_cats = _desired_attention_categories(decision, message, moved=False)
                 if in_inbox_cats:
                     try:
                         await _apply_message_categories(
@@ -4682,6 +5075,14 @@ async def _automove_for_account(
                         )
                     except Exception:
                         pass  # label errors never block the skip flow
+            motion_task = await _maybe_create_motion_task(
+                account_id=account_id,
+                account_email=account_email,
+                provider_message_id=provider_message_id,
+                decision=decision,
+                message=message,
+                categories=in_inbox_cats,
+            )
             _persist_move_action(
                 account_id=account_id,
                 account_email=account_email,
@@ -4705,6 +5106,7 @@ async def _automove_for_account(
                     "recommended_folder": decision.recommended_folder,
                     "confidence": decision.confidence,
                     "moved": False,
+                    "motion_task": motion_task,
                 }
             )
             continue
@@ -4780,14 +5182,14 @@ async def _automove_for_account(
             )
             continue
 
+        desired_categories = _desired_attention_categories(
+            decision,
+            message,
+            moved=True,
+        )
         applied_categories = []
         label_error = None
         if _outlook_category_labels_enabled():
-            desired_categories = _desired_attention_categories(
-                decision,
-                message,
-                moved=True,
-            )
             if label_bootstrap_error:
                 label_error = label_bootstrap_error
             else:
@@ -4849,6 +5251,14 @@ async def _automove_for_account(
             category_error=label_error,
         )
         moved_count += 1
+        motion_task = await _maybe_create_motion_task(
+            account_id=account_id,
+            account_email=account_email,
+            provider_message_id=provider_message_id,
+            decision=decision,
+            message=message,
+            categories=applied_categories or desired_categories,
+        )
 
         sms_reason: str | None = None
         if _sms_alerts_enabled() and not _sms_already_sent(account_id, provider_message_id):
@@ -4880,6 +5290,7 @@ async def _automove_for_account(
                 "categories_applied": applied_categories,
                 "category_error": label_error,
                 "sms_sent": sms_reason is not None,
+                "motion_task": motion_task,
             }
         )
 

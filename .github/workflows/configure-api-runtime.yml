@@ -106,6 +106,8 @@ jobs:
             ALLOWED_ACCOUNT_EMAILS="$(fetch_secret allowed-account-emails)"
             echo "Fetching secret: azure-openai-api-key"
             AZURE_OPENAI_API_KEY="$(fetch_secret azure-openai-api-key)"
+            echo "Fetching secret: mption-api-key"
+            MOTION_API_KEY="$(fetch_secret mption-api-key)"
 
             # Build the tenant allow-list from the committed Decoding Options
             # seed plus the DHW and BW tenant ids fetched from Key Vault.
@@ -120,7 +122,8 @@ jobs:
               BW_TID \
               ALLOWED_ACCOUNT_EMAILS \
               ALLOWED_MICROSOFT_TENANT_IDS \
-              AZURE_OPENAI_API_KEY; do
+              AZURE_OPENAI_API_KEY \
+              MOTION_API_KEY; do
               if [[ -z "${!var:-}" ]]; then
                 echo "::error::Required runtime variable '${var}' is empty before applying Container App settings." >&2
                 exit 1
@@ -144,6 +147,8 @@ jobs:
                 ALLOWED_MICROSOFT_TENANT_IDS="$ALLOWED_MICROSOFT_TENANT_IDS" \
                 ALLOWED_ACCOUNT_EMAILS="$ALLOWED_ACCOUNT_EMAILS" \
                 AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" \
+                MOTION_API_KEY="$MOTION_API_KEY" \
+                MOTION_TASKS_ENABLED=true \
                 KEY_VAULT_REFS_ENABLED=false \
                 OUTLOOK_CATEGORY_LABELS_ENABLED=true \
               --output none

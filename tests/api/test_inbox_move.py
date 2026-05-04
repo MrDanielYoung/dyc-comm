@@ -849,6 +849,112 @@ def test_automove_can_scan_oldest_first(monkeypatch):
     assert payload["move_limit"] == 100
 
 
+def test_motion_task_created_for_pay_this_email(monkeypatch):
+    monkeypatch.setenv("MOTION_TASKS_ENABLED", "true")
+    monkeypatch.setenv("MOTION_API_KEY", "motion-key")
+    monkeypatch.setattr(main, "_database_url", lambda: None)
+    monkeypatch.setattr(main, "_motion_task_already_created", lambda account_id, msg_id: False)
+
+    async def fake_workspace_id():
+        return "workspace-123"
+
+    async def fake_assignee_id():
+        return "user-123"
+
+    posts: list[tuple[str, dict]] = []
+
+    async def fake_post(path, payload):
+        posts.append((path, payload))
+        return {"id": "motion-task-1", "name": payload["name"]}
+
+    monkeypatch.setattr(main, "_motion_workspace_id", fake_workspace_id)
+    monkeypatch.setattr(main, "_motion_assignee_id", fake_assignee_id)
+    monkeypatch.setattr(main, "_motion_post_json", fake_post)
+    monkeypatch.setattr(main, "_record_motion_task_sync", lambda **kwargs: None)
+
+    decision = classifier_module.ClassificationDecision(
+        recommended_folder="30 - Money",
+        category="finance_money",
+        confidence=0.97,
+        confidence_band="high",
+        reasons=["billing"],
+        safety_flags=[],
+        forced_review=False,
+        provider_consulted=False,
+        provider=None,
+    )
+
+    result = asyncio.run(
+        main._maybe_create_motion_task(
+            account_id="account-123",
+            account_email="daniel@danielyoung.io",
+            provider_message_id="msg-pay",
+            decision=decision,
+            message={
+                "id": "msg-pay",
+                "subject": "Past due invoice",
+                "bodyPreview": "Please pay this overdue invoice.",
+                "receivedDateTime": "2026-05-04T09:00:00Z",
+                "from": {"emailAddress": {"address": "billing@example.com"}},
+            },
+            categories=["< Money >", "< Pay This >", "< Today >"],
+        )
+    )
+
+    assert result == {
+        "enabled": True,
+        "created": True,
+        "task_id": "motion-task-1",
+        "priority": "ASAP",
+        "reason": "payment_attention",
+    }
+    assert posts[0][0] == "/v1/tasks"
+    payload = posts[0][1]
+    assert payload["workspaceId"] == "workspace-123"
+    assert payload["assigneeId"] == "user-123"
+    assert payload["priority"] == "ASAP"
+    assert payload["duration"] == "REMINDER"
+    assert payload["labels"] == ["DYC Comm", "Email", "payment_attention"]
+    assert "clear this in Motion" in payload["description"]
+    assert "Past due invoice" in payload["name"]
+
+
+def test_motion_task_not_duplicated_when_already_created(monkeypatch):
+    monkeypatch.setenv("MOTION_TASKS_ENABLED", "true")
+    monkeypatch.setenv("MOTION_API_KEY", "motion-key")
+    monkeypatch.setattr(main, "_motion_task_already_created", lambda account_id, msg_id: True)
+
+    async def fail_create(*args, **kwargs):
+        raise AssertionError("must not create a second Motion task for the same message")
+
+    monkeypatch.setattr(main, "_create_motion_task_for_message", fail_create)
+
+    decision = classifier_module.ClassificationDecision(
+        recommended_folder="10 - Review",
+        category="human_direct",
+        confidence=0.9,
+        confidence_band="high",
+        reasons=["direct"],
+        safety_flags=[],
+        forced_review=False,
+        provider_consulted=False,
+        provider=None,
+    )
+
+    result = asyncio.run(
+        main._maybe_create_motion_task(
+            account_id="account-123",
+            account_email="daniel@danielyoung.io",
+            provider_message_id="msg-reply",
+            decision=decision,
+            message={"subject": "Can you reply today?", "bodyPreview": "Need your response"},
+            categories=["< Reply >", "< Today >"],
+        )
+    )
+
+    assert result == {"enabled": True, "created": False, "reason": "already_created"}
+
+
 def test_paginated_inbox_fetch_supports_oldest_order(monkeypatch):
     calls: list[dict] = []
 
