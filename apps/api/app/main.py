@@ -4423,6 +4423,13 @@ def _motion_tasks_enabled() -> bool:
     return _bool_env("MOTION_TASKS_ENABLED") and bool(os.getenv("MOTION_API_KEY"))
 
 
+# In-process cache for Motion workspace and assignee IDs. These are stable
+# for the lifetime of the process and eliminate repeated API round-trips
+# during automation runs when the env vars are not set.
+_MOTION_WORKSPACE_ID_CACHE: str | None = None
+_MOTION_ASSIGNEE_ID_CACHE: str | None = None
+
+
 def _is_pay_this_message(message: dict[str, Any]) -> bool:
     subject = str(message.get("subject") or "").lower()
     body = str(message.get("bodyPreview") or "").lower()
@@ -4588,6 +4595,9 @@ def _motion_task_reason_and_priority(
         return "reply_needed", "HIGH"
     if _is_sms_urgent(decision, message):
         return "urgent_email", "ASAP"
+    # < Today > alone (e.g. urgent subject that isn't payment/customer/reply)
+    if "< Today >" in important_labels:
+        return "today_action", "HIGH"
     return None
 
 
@@ -4599,6 +4609,7 @@ def _motion_task_name(reason: str, subject: str) -> str:
         "meeting_reply": "Respond to meeting email",
         "reply_needed": "Reply to email",
         "urgent_email": "Handle urgent email",
+        "today_action": "Action needed today",
     }.get(reason, "Handle important email")
     name = f"{prefix}: {clean_subject}"
     return name[:250]
@@ -4674,9 +4685,12 @@ async def _motion_post_json(path: str, payload: dict[str, Any]) -> dict[str, Any
 
 
 async def _motion_workspace_id() -> str:
+    global _MOTION_WORKSPACE_ID_CACHE
     configured = os.getenv("MOTION_WORKSPACE_ID", "").strip()
     if configured:
         return configured
+    if _MOTION_WORKSPACE_ID_CACHE:
+        return _MOTION_WORKSPACE_ID_CACHE
     payload = await _motion_get_json("/v1/workspaces")
     workspaces = payload.get("workspaces") or payload.get("value") or []
     if not isinstance(workspaces, list) or not workspaces:
@@ -4685,18 +4699,23 @@ async def _motion_workspace_id() -> str:
     workspace_id = workspace.get("id") if isinstance(workspace, dict) else None
     if not workspace_id:
         raise RuntimeError("Motion workspace lookup did not include an id.")
-    return str(workspace_id)
+    _MOTION_WORKSPACE_ID_CACHE = str(workspace_id)
+    return _MOTION_WORKSPACE_ID_CACHE
 
 
 async def _motion_assignee_id() -> str:
+    global _MOTION_ASSIGNEE_ID_CACHE
     configured = os.getenv("MOTION_ASSIGNEE_ID", "").strip()
     if configured:
         return configured
+    if _MOTION_ASSIGNEE_ID_CACHE:
+        return _MOTION_ASSIGNEE_ID_CACHE
     payload = await _motion_get_json("/v1/users/me")
     user_id = payload.get("id") or (payload.get("user") or {}).get("id")
     if not user_id:
         raise RuntimeError("Motion current-user lookup did not include an id.")
-    return str(user_id)
+    _MOTION_ASSIGNEE_ID_CACHE = str(user_id)
+    return _MOTION_ASSIGNEE_ID_CACHE
 
 
 async def _create_motion_task_for_message(
@@ -4760,6 +4779,8 @@ async def _maybe_create_motion_task(
             priority=priority,
         )
         task_id = str(task.get("id") or "")
+        if not task_id:
+            logger.warning("motion.task.no_id message_id=%s reason=%s", provider_message_id, reason)
         task_name = str(task.get("name") or _motion_task_name(reason, message.get("subject") or ""))
         _record_motion_task_sync(
             account_id=account_id,
