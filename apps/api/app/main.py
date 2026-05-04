@@ -4671,9 +4671,7 @@ async def _automove_for_account(
             # < Pay This >, < Reply >, < Customer >, < Today > etc. in their
             # inbox without needing to open each email.
             if _outlook_category_labels_enabled() and not label_bootstrap_error:
-                in_inbox_cats = _desired_attention_categories(
-                    decision, message, moved=False
-                )
+                in_inbox_cats = _desired_attention_categories(decision, message, moved=False)
                 if in_inbox_cats:
                     try:
                         await _apply_message_categories(
