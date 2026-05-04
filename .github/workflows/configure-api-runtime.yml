@@ -149,6 +149,8 @@ jobs:
                 AZURE_OPENAI_API_KEY="$AZURE_OPENAI_API_KEY" \
                 MOTION_API_KEY="$MOTION_API_KEY" \
                 MOTION_TASKS_ENABLED=true \
+                MOTION_WORKSPACE_ID=3KoEJ_1HxoHz2mA42z3Ge \
+                MOTION_PROJECT_ID=pr_eY9tn2bhtmwisD1Ds4Jo79 \
                 KEY_VAULT_REFS_ENABLED=false \
                 OUTLOOK_CATEGORY_LABELS_ENABLED=true \
               --output none
