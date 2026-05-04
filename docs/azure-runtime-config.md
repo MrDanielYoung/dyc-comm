@@ -63,6 +63,10 @@ These mirror `apps/api/.env.example` and `infra/azure/api-runtime-settings.env.e
 | `KEY_VAULT_REFS_ENABLED` | `true` when secrets resolve via Container App Key Vault refs; `false` when the workflow copies values from Key Vault into plain Container App env vars. |
 | `ALLOWED_MICROSOFT_TENANT_IDS` | Comma-separated tenant id allow-list enforced by the OAuth callback. Built at apply time from the committed Decoding Options seed plus partner tenant ids fetched from Key Vault (`dhw-tid`, `bw-tid`). When unset on a container, the API falls back to `MICROSOFT_ENTRA_TENANT_ID` only. |
 | `ALLOWED_ACCOUNT_EMAILS` | Comma-separated per-user email allow-list enforced by the OAuth callback. **Required** alongside `ALLOWED_MICROSOFT_TENANT_IDS`: a tenant allow-list alone would admit any user in DHW/BW. Sourced from Key Vault secret `allowed-account-emails`. |
+| `MOTION_TASKS_ENABLED` | Enables one-way Motion task creation for highly important emails. |
+| `MOTION_API_KEY` | Motion API key. Treat as a secret. |
+| `MOTION_WORKSPACE_ID` | Optional Motion workspace id. If unset, the API uses Motion's first returned workspace. |
+| `MOTION_ASSIGNEE_ID` | Optional Motion user id to assign tasks to. If unset, the API assigns tasks to the current API user. |
 
 The Entra values are seeded now so the API container can boot with the same
 configuration shape across environments and so `/config-check` can report
@@ -177,6 +181,7 @@ non-empty):
 | `ALLOWED_MICROSOFT_TENANT_IDS` (DHW partner tenant id) | `dhw-tid` |
 | `ALLOWED_MICROSOFT_TENANT_IDS` (BW partner tenant id) | `bw-tid` |
 | `ALLOWED_ACCOUNT_EMAILS` | `allowed-account-emails` |
+| `MOTION_API_KEY` | `mption-api-key` |
 
 `ALLOWED_MICROSOFT_TENANT_IDS` is built at apply time as the comma-separated
 concatenation of the Decoding Options tenant id

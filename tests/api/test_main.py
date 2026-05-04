@@ -30,6 +30,10 @@ RUNTIME_VARIABLES = (
     "ACS_CONNECTION_STRING",
     "ACS_FROM_NUMBER",
     "ALERT_PHONE_NUMBER",
+    "MOTION_API_KEY",
+    "MOTION_WORKSPACE_ID",
+    "MOTION_ASSIGNEE_ID",
+    "MOTION_TASKS_ENABLED",
 )
 
 SECRET_VARIABLES = {
@@ -39,6 +43,7 @@ SECRET_VARIABLES = {
     "AZURE_AI_API_KEY",
     "AUTOMATION_RUN_TOKEN",
     "ACS_CONNECTION_STRING",
+    "MOTION_API_KEY",
 }
 
 DECODING_OPTIONS_TENANT = "99c0f350-71bd-47f9-ab6a-cf10bc76533a"
@@ -134,6 +139,11 @@ def test_config_check_reflects_set_env(monkeypatch):
     )
     monkeypatch.setenv("ACS_FROM_NUMBER", "+15550001234")
     monkeypatch.setenv("ALERT_PHONE_NUMBER", "+15550005678")
+    motion_key = "motion-secret-do-not-leak"
+    monkeypatch.setenv("MOTION_API_KEY", motion_key)
+    monkeypatch.setenv("MOTION_WORKSPACE_ID", "motion-workspace-id")
+    monkeypatch.setenv("MOTION_ASSIGNEE_ID", "motion-user-id")
+    monkeypatch.setenv("MOTION_TASKS_ENABLED", "true")
 
     response = client.get("/config-check")
     assert response.status_code == 200
@@ -163,6 +173,7 @@ def test_config_check_reflects_set_env(monkeypatch):
         azure_openai_key,
         azure_ai_key,
         azure_endpoint,
+        motion_key,
     ):
         assert sensitive not in body, f"value leaked into /config-check response: {sensitive!r}"
 
