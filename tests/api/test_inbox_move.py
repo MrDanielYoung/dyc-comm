@@ -914,7 +914,7 @@ def test_motion_task_created_for_pay_this_email(monkeypatch):
     assert payload["assigneeId"] == "user-123"
     assert payload["priority"] == "ASAP"
     assert payload["duration"] == "REMINDER"
-    assert payload["labels"] == ["DYC Comm", "Email", "payment_attention"]
+    assert payload["labels"] == ["Email", "Pay This"]
     assert "clear this in Motion" in payload["description"]
     assert "Past due invoice" in payload["name"]
 

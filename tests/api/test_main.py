@@ -33,6 +33,7 @@ RUNTIME_VARIABLES = (
     "MOTION_API_KEY",
     "MOTION_WORKSPACE_ID",
     "MOTION_ASSIGNEE_ID",
+    "MOTION_PROJECT_ID",
     "MOTION_TASKS_ENABLED",
 )
 
@@ -143,6 +144,7 @@ def test_config_check_reflects_set_env(monkeypatch):
     monkeypatch.setenv("MOTION_API_KEY", motion_key)
     monkeypatch.setenv("MOTION_WORKSPACE_ID", "motion-workspace-id")
     monkeypatch.setenv("MOTION_ASSIGNEE_ID", "motion-user-id")
+    monkeypatch.setenv("MOTION_PROJECT_ID", "motion-project-id")
     monkeypatch.setenv("MOTION_TASKS_ENABLED", "true")
 
     response = client.get("/config-check")
