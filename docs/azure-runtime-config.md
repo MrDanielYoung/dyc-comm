@@ -181,7 +181,7 @@ non-empty):
 | `ALLOWED_MICROSOFT_TENANT_IDS` (DHW partner tenant id) | `dhw-tid` |
 | `ALLOWED_MICROSOFT_TENANT_IDS` (BW partner tenant id) | `bw-tid` |
 | `ALLOWED_ACCOUNT_EMAILS` | `allowed-account-emails` |
-| `MOTION_API_KEY` | `mption-api-key` |
+| `MOTION_API_KEY` | `motion-api-key` |
 
 `ALLOWED_MICROSOFT_TENANT_IDS` is built at apply time as the comma-separated
 concatenation of the Decoding Options tenant id
